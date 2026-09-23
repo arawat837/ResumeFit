@@ -1,0 +1,30 @@
+# Environment and secrets (CRITICAL - never commit your Gemini API key)
+.env
+backend/.env
+*.env.local
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Node modules & build outputs
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+
+# Python cache & compiled files
+__pycache__/
+*/__pycache__/
+*/**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
