@@ -12,18 +12,32 @@ from config import (
     ALLOW_CREDENTIALS,
     IS_CORS_FALLBACK
 )
+from contextlib import asynccontextmanager
 from presets.roles import ROLE_PRESETS
 from parsers import PDFParser, DOCXParser
 from agents.pipeline import AgentPipeline
+from database import init_db
+from routers.auth import router as auth_router
+from routers.export_router import router as export_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("resumefit")
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    logger.info("SQLite database initialized successfully.")
+    yield
+
 app = FastAPI(
     title="ResumeFit API",
     description="ATS Compatibility & AI Optimization Pipeline for University Resumes",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
+
+app.include_router(auth_router)
+app.include_router(export_router)
 
 # CORS setup
 if IS_CORS_FALLBACK:

@@ -30,23 +30,38 @@ export async function scanResume({ file, mode, roleId, customJd }) {
     formData.append('custom_jd', customJd);
   }
 
-  const res = await fetch(`${API_BASE_URL}/api/scan`, {
-    method: 'POST',
-    body: formData,
-  });
+  // Set safe 75-second timeout to accommodate Render free-tier cold starts
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 75000);
 
-  if (!res.ok) {
-    let errorDetail = 'An error occurred during resume analysis.';
-    try {
-      const errJson = await res.json();
-      if (errJson && errJson.detail) {
-        errorDetail = errJson.detail;
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/scan`, {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      let errorDetail = 'An error occurred during resume analysis.';
+      try {
+        const errJson = await res.json();
+        if (errJson && errJson.detail) {
+          errorDetail = errJson.detail;
+        }
+      } catch (_) {
+        errorDetail = `Server responded with status ${res.status}: ${res.statusText}`;
       }
-    } catch (_) {
-      errorDetail = `Server responded with status ${res.status}: ${res.statusText}`;
+      throw new Error(errorDetail);
     }
-    throw new Error(errorDetail);
-  }
 
-  return await res.json();
+    return await res.json();
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error('Scan request timed out. The server took longer than 75 seconds to respond. Please try again.');
+    }
+    throw err;
+  }
 }

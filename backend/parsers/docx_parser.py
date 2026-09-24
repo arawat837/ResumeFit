@@ -16,13 +16,22 @@ class DOCXParser:
 
     @staticmethod
     def parse(file_bytes: bytes) -> Tuple[str, Dict[str, Any]]:
+        # 1. Structural Validation: Check for ZIP/DOCX magic bytes
+        if not file_bytes.startswith(b"PK\x03\x04"):
+            raise HTTPException(
+                status_code=422,
+                detail="The uploaded file does not match a valid Word document (.docx) structure. If you renamed another file type to .docx, please upload an authentic DOCX or PDF file."
+            )
+
         try:
             doc = Document(io.BytesIO(file_bytes))
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error opening DOCX: {e}")
             raise HTTPException(
                 status_code=422,
-                detail=f"Could not parse DOCX file. It may be corrupted or in an unsupported format: {str(e)}"
+                detail="This Word document appears to be corrupted or unreadable. Please upload a valid, readable DOCX or PDF file."
             )
 
         extracted_text_blocks = []

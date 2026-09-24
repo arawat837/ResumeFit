@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { CheckCircle2, Loader2, Sparkles, FileSearch, Target, BarChart3, Lightbulb } from 'lucide-react';
+import { CheckCircle2, Loader2, Sparkles, FileSearch, Target, BarChart3, Lightbulb, Server } from 'lucide-react';
 
 export default function ProcessingScreen({ mode, isComplete, onFinishAnimation }) {
   // Step tracker: 0 = Parsing, 1 = JD, 2 = Scoring, 3 = Recommendations
   const [currentStep, setCurrentStep] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const steps = [
     {
@@ -45,7 +46,14 @@ export default function ProcessingScreen({ mode, isComplete, onFinishAnimation }
       });
     }, 1100);
 
-    return () => clearInterval(timer);
+    const elapsedTimer = setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+
+    return () => {
+      clearInterval(timer);
+      clearInterval(elapsedTimer);
+    };
   }, []);
 
   // When backend scan finishes, fast-forward to step 4 and trigger onFinishAnimation
@@ -60,7 +68,7 @@ export default function ProcessingScreen({ mode, isComplete, onFinishAnimation }
   }, [isComplete, onFinishAnimation]);
 
   return (
-    <div className="w-full max-w-xl mx-auto bg-white rounded-3xl p-8 sm:p-10 border border-slate-200 shadow-card text-center">
+    <div className="w-full max-w-xl mx-auto bg-white rounded-3xl p-8 sm:p-10 border border-slate-200 shadow-card text-center animate-slideUp">
       {/* Top Animated Icon */}
       <div className="w-16 h-16 mx-auto rounded-2xl bg-brand-50 text-brand-600 flex items-center justify-center mb-5 border border-brand-100 shadow-soft animate-pulse-subtle">
         <Sparkles className="w-8 h-8 stroke-[1.75]" />
@@ -69,9 +77,24 @@ export default function ProcessingScreen({ mode, isComplete, onFinishAnimation }
       <h2 className="text-xl font-bold text-slate-900 mb-2">
         Analyzing Your Resume
       </h2>
-      <p className="text-sm text-slate-500 mb-8 max-w-md mx-auto">
+      <p className="text-sm text-slate-500 mb-6 max-w-md mx-auto">
         Our multi-agent pipeline is evaluating your resume against ATS tracking algorithms.
       </p>
+
+      {/* Render Free-Tier Cold Start Banner (triggered if elapsed >= 10s) */}
+      {elapsedSeconds >= 10 && !isComplete && (
+        <div className="mb-6 p-4 rounded-2xl bg-amber-50/90 border border-amber-200/80 text-amber-900 flex items-start gap-3 text-left animate-fadeIn">
+          <Server className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5 animate-pulse" />
+          <div className="text-xs leading-relaxed">
+            <p className="font-semibold text-amber-900 mb-0.5">
+              Waking up the server
+            </p>
+            <p className="text-amber-800">
+              Waking up the server — this can take up to a minute on the first request after inactivity.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Steps List */}
       <div className="space-y-4 text-left">

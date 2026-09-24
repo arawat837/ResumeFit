@@ -6,7 +6,10 @@ import ModeSelector from './components/ModeSelector';
 import ProcessingScreen from './components/ProcessingScreen';
 import ResultsScreen from './components/ResultsScreen';
 import UpgradeModal from './components/UpgradeModal';
+import HistoryDrawer from './components/HistoryDrawer';
+import AuthModal from './components/AuthModal';
 import { fetchPresets, scanResume } from './services/api';
+import { getScanHistory, saveScanResult, clearScanHistory } from './services/history';
 
 export default function App() {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -21,8 +24,13 @@ export default function App() {
   const [scanResult, setScanResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
-  // Load preset job descriptions on mount
+  // Session-based scan history state
+  const [history, setHistory] = useState([]);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+
+  // Load preset job descriptions and session history on mount
   useEffect(() => {
     fetchPresets().then((data) => {
       setPresets(data);
@@ -30,6 +38,9 @@ export default function App() {
         setSelectedRoleId(data[0].id);
       }
     });
+
+    // Safe session storage read
+    setHistory(getScanHistory());
   }, []);
 
   const handleFileSelect = (file) => {
@@ -60,6 +71,15 @@ export default function App() {
       setScanResult(result);
       // Mark API complete so the ProcessingScreen can wrap up its animated steps
       setIsApiComplete(true);
+
+      // Save to browser sessionStorage under resumefit_scan_history (max 10 items)
+      const updatedHistory = saveScanResult({
+        filename: selectedFile.name,
+        mode,
+        roleId: selectedRoleId,
+        result,
+      });
+      setHistory(updatedHistory);
     } catch (err) {
       console.error('Scan error:', err);
       setErrorMessage(err.message || 'Failed to scan resume. Please try again.');
@@ -79,10 +99,28 @@ export default function App() {
     setErrorMessage(null);
   };
 
+  // Re-render ResultsScreen directly from cached session history (NO new API call)
+  const handleSelectHistoryScan = (cachedScan) => {
+    setScanResult(cachedScan);
+    setSelectedFile({ name: cachedScan.filename });
+    setStatus('results');
+    setErrorMessage(null);
+  };
+
+  const handleClearHistory = () => {
+    clearScanHistory();
+    setHistory([]);
+  };
+
   return (
-    <div className="min-h-screen bg-brand-50 text-slate-900 flex flex-col font-sans selection:bg-brand-200">
+    <div className="min-h-screen bg-brand-50 text-slate-900 flex flex-col font-sans selection:bg-brand-200 overflow-x-hidden">
       {/* Navigation Header */}
-      <Header onOpenUpgrade={() => setIsUpgradeModalOpen(true)} />
+      <Header
+        onOpenUpgrade={() => setIsUpgradeModalOpen(true)}
+        onOpenHistory={() => setIsHistoryOpen(true)}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
+        historyCount={history.length}
+      />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-8 sm:py-12">
@@ -114,6 +152,7 @@ export default function App() {
                 onFileSelect={handleFileSelect}
                 onFileRemove={handleFileRemove}
                 errorMessage={errorMessage}
+                onClearError={() => setErrorMessage(null)}
               />
             </div>
 
@@ -136,7 +175,7 @@ export default function App() {
                 disabled={!selectedFile}
                 className={`inline-flex items-center justify-center gap-2.5 px-8 py-4 rounded-2xl text-sm font-bold shadow-soft transition-all transform ${
                   selectedFile
-                    ? 'bg-brand-600 hover:bg-brand-700 text-white cursor-pointer hover:scale-[1.02] shadow-card'
+                    ? 'bg-brand-600 hover:bg-brand-700 text-white cursor-pointer hover:scale-[1.02] shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2'
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                 }`}
               >
@@ -158,7 +197,7 @@ export default function App() {
 
         {/* VIEW 2: LIVE MULTI-STEP PROCESSING */}
         {status === 'processing' && (
-          <div className="py-12">
+          <div className="py-12 animate-fadeIn">
             <ProcessingScreen
               mode={mode}
               isComplete={isApiComplete}
@@ -169,19 +208,38 @@ export default function App() {
 
         {/* VIEW 3: RESULTS SCREEN */}
         {status === 'results' && scanResult && (
-          <ResultsScreen
-            result={scanResult}
-            fileName={selectedFile?.name}
-            onReset={handleResetScan}
-            onOpenUpgrade={() => setIsUpgradeModalOpen(true)}
-          />
+          <div className="animate-fadeIn">
+            <ResultsScreen
+              result={scanResult}
+              fileName={selectedFile?.name}
+              onReset={handleResetScan}
+              onOpenUpgrade={() => setIsUpgradeModalOpen(true)}
+            />
+          </div>
         )}
       </main>
+
+      {/* Session Scan History Drawer */}
+      <HistoryDrawer
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+        history={history}
+        onSelectScan={handleSelectHistoryScan}
+        onClearHistory={handleClearHistory}
+      />
 
       {/* Pro Upgrade Roadmap Modal */}
       <UpgradeModal
         isOpen={isUpgradeModalOpen}
         onClose={() => setIsUpgradeModalOpen(false)}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
+      />
+
+      {/* User Authentication Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onAuthSuccess={() => setIsUpgradeModalOpen(true)}
       />
 
       {/* Simple Footer */}

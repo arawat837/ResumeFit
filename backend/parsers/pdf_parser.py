@@ -22,6 +22,13 @@ class PDFParser:
         has_multi_column = False
         page_count = 0
 
+        # 1. Structural Validation: Check for PDF magic header
+        if not (file_bytes.startswith(b"%PDF") or b"%PDF" in file_bytes[:1024]):
+            raise HTTPException(
+                status_code=422,
+                detail="The uploaded file does not match a valid PDF document structure. If you renamed another file type to .pdf, please upload an authentic PDF or DOCX file."
+            )
+
         try:
             with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
                 page_count = len(pdf.pages)
@@ -53,11 +60,13 @@ class PDFParser:
                     except Exception:
                         pass
 
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error opening PDF with pdfplumber: {e}")
             raise HTTPException(
                 status_code=422,
-                detail=f"Could not parse the PDF file. It may be corrupted or password-protected: {str(e)}"
+                detail="This PDF appears to be corrupted or password-protected. Please upload an unlocked, text-based PDF."
             )
 
         full_text = "\n\n".join(extracted_pages).strip()

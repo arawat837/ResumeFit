@@ -117,6 +117,7 @@ class AgentPipeline:
             "ats_score": scoring_result["ats_score"],
             "breakdown": scoring_result["breakdown"],
             "recommendations": recommendations,
+            "parsed_resume": parsed_resume,
             "parsed_summary": {
                 "skills_detected": len(parsed_resume.get("skills", [])),
                 "experience_entries": len(parsed_resume.get("experience", [])),

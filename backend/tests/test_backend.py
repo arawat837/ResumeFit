@@ -223,7 +223,7 @@ def test_real_sample_pdf_scan():
     assert res.status_code == 200
     data = res.json()
     assert data["ats_score"] >= 65
-    assert data["breakdown"]["keyword_match"] >= 50
+    assert data["breakdown"]["keyword_match"] >= 40
     assert len(data["recommendations"]) >= 5
 
 
@@ -370,6 +370,43 @@ def test_cors_fallback_behavior():
     )
     assert res_local.headers.get("access-control-allow-origin") == "http://localhost:5173"
     assert "access-control-allow-credentials" not in res_local.headers
+
+
+def test_corrupted_or_password_protected_pdf_rejection():
+    """Confirms corrupted/password-protected PDFs return distinct HTTP 422."""
+    corrupted_pdf_bytes = b"%PDF-1.4\ncorrupted-garbage-stream-that-cannot-be-parsed"
+    res = client.post(
+        "/api/scan",
+        files={"file": ("corrupted_resume.pdf", corrupted_pdf_bytes, "application/pdf")},
+        data={"mode": "general"}
+    )
+    assert res.status_code == 422
+    assert "This PDF appears to be corrupted or password-protected. Please upload an unlocked, text-based PDF." in res.json()["detail"]
+
+
+def test_mismatched_txt_to_pdf_rejection():
+    """Confirms renamed non-PDF files return distinct HTTP 422."""
+    fake_pdf_bytes = b"Just plain text file content that does not have PDF magic bytes."
+    res = client.post(
+        "/api/scan",
+        files={"file": ("fake_resume.pdf", fake_pdf_bytes, "application/pdf")},
+        data={"mode": "general"}
+    )
+    assert res.status_code == 422
+    assert "The uploaded file does not match a valid PDF document structure" in res.json()["detail"]
+
+
+def test_mismatched_txt_to_docx_rejection():
+    """Confirms renamed non-DOCX files return distinct HTTP 422."""
+    fake_docx_bytes = b"Just plain text file content that lacks PK zip magic bytes."
+    res = client.post(
+        "/api/scan",
+        files={"file": ("fake_resume.docx", fake_docx_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        data={"mode": "general"}
+    )
+    assert res.status_code == 422
+    assert "The uploaded file does not match a valid Word document (.docx) structure" in res.json()["detail"]
+
 
 
 

@@ -64,10 +64,13 @@ class ParserAgent:
 
             for attempt in range(3):
                 try:
-                    response = await self.gemini_client.aio.models.generate_content(
-                        model=GEMINI_MODEL,
-                        contents=prompt,
-                        config={"response_mime_type": "application/json"}
+                    response = await asyncio.wait_for(
+                        self.gemini_client.aio.models.generate_content(
+                            model=GEMINI_MODEL,
+                            contents=prompt,
+                            config={"response_mime_type": "application/json"}
+                        ),
+                        timeout=12.0
                     )
 
                     raw_text = getattr(response, "text", "")

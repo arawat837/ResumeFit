@@ -48,4 +48,17 @@ else:
     ALLOW_CREDENTIALS = False
     IS_CORS_FALLBACK = True
 
+# Database Configuration (Supabase PostgreSQL or Local SQLite)
+DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_PATH = os.getenv("DATABASE_PATH", str(BASE_DIR / "resumefit.db"))
+
+# JWT Authentication Configuration
+JWT_SECRET = os.getenv("JWT_SECRET", "resumefit-super-secret-jwt-key-2026-university-student-ats")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_DAYS = 30  # 30-day persistent sessions
+
+# Valid Pro Promo Codes
+raw_promo_codes = os.getenv("PROMO_CODES", "CAMPUS2026,TEACHERVIP,TEAMPRO,RESUMEFIT_PRO,STUDENTVIP")
+VALID_PROMO_CODES = [c.strip().upper() for c in raw_promo_codes.split(",") if c.strip()]
+
 
