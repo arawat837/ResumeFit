@@ -70,8 +70,9 @@ def init_db(db_path: Optional[str] = None, db_url: Optional[str] = None) -> None
                         created_at TEXT NOT NULL
                     );
                     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+                    ALTER TABLE users ENABLE ROW LEVEL SECURITY;
                 """)
-            logger.info("Supabase PostgreSQL tables verified successfully.")
+            logger.info("Supabase PostgreSQL tables & RLS verified successfully.")
         finally:
             conn.close()
     else:
