@@ -258,7 +258,7 @@ class MockAioModels:
 
     async def generate_content(self, model: str, contents: str, config: dict = None):
         await asyncio.sleep(self.delay)
-        if "resume text into structured JSON" in contents:
+        if "structured JSON" in contents or "resume parsing engine" in contents:
             return MockGeminiResponse(json.dumps({
                 "contact": {"name": "Alex Rivera", "email": "alex@test.com", "phone": "555-1234", "linkedin": "linkedin.com/in/alex"},
                 "summary": "Data Analyst with skills in SQL and Python",

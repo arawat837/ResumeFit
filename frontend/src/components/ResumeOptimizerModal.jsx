@@ -209,10 +209,13 @@ export default function ResumeOptimizerModal({
   const candidateEmail = contact.email || parsed_resume.email || '';
   const candidatePhone = contact.phone || parsed_resume.phone || '';
   const candidateLinkedin = contact.linkedin || parsed_resume.linkedin || '';
+  const candidateLocation = contact.location || parsed_resume.location || '';
   const experiences = parsed_resume.experience || [];
   const education = parsed_resume.education || [];
   const skills = parsed_resume.skills || [];
+  const skillsRawLines = parsed_resume.skills_raw_lines || [];
   const projects = parsed_resume.projects || [];
+  const leadership = parsed_resume.leadership || [];
   const summary = parsed_resume.summary || '';
 
   // Determine section ordering based on template
@@ -220,6 +223,410 @@ export default function ResumeOptimizerModal({
   const isTech = selectedTemplate === 'tech_minimalist';
   const isCorporate = selectedTemplate === 'modern_corporate';
   const isCustom = selectedTemplate === 'custom';
+
+  const templateOrderMap = {
+    original: ['education', 'experience', 'projects', 'leadership', 'skills'],
+    ivy_league: ['education', 'experience', 'leadership', 'projects', 'skills'],
+    tech_minimalist: ['skills', 'projects', 'experience', 'education', 'leadership'],
+    modern_corporate: ['experience', 'projects', 'education', 'leadership', 'skills'],
+    custom: ['education', 'experience', 'projects', 'leadership', 'skills']
+  };
+  const activeOrder = templateOrderMap[selectedTemplate] || templateOrderMap.original;
+
+  // Section Renderers for Side-by-Side Paper Previews
+  const renderEducationSection = (isRight = false) => {
+    if (!education || education.length === 0) return null;
+    return (
+      <div className="space-y-2">
+        <h3
+          className={`text-xs font-bold uppercase tracking-wider border-b pb-1 ${
+            isRight
+              ? isCorporate
+                ? 'text-sky-800 border-sky-200'
+                : 'text-slate-900 border-slate-200'
+              : 'text-slate-700 border-slate-100'
+          }`}
+        >
+          Education
+        </h3>
+        {education.map((edu, idx) => (
+          <div key={idx} className="flex justify-between items-baseline text-[11px]">
+            <div>
+              <span className={`font-bold ${isRight ? 'text-slate-900' : 'text-slate-800'}`}>
+                {edu.degree || 'Degree'}
+              </span>
+              <span className={isRight ? 'text-slate-600' : 'text-slate-500'}>
+                {edu.institution ? ` — ${edu.institution}` : ''}
+              </span>
+            </div>
+            <span className={`text-[10px] ${isRight ? 'text-slate-500 font-semibold' : 'text-slate-400'}`}>
+              {edu.year || ''}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const renderExperienceSection = (isRight = false) => {
+    if (!experiences || experiences.length === 0) return null;
+    return (
+      <div className="space-y-3">
+        <h3
+          className={`text-xs font-bold uppercase tracking-wider border-b pb-1 ${
+            isRight
+              ? isCorporate
+                ? 'text-sky-800 border-sky-200'
+                : 'text-slate-900 border-slate-200'
+              : 'text-slate-700 border-slate-100'
+          }`}
+        >
+          {isRight ? 'Professional Experience' : 'Work Experience'}
+        </h3>
+        {experiences.map((exp, idx) => (
+          <div key={idx} className="space-y-1">
+            <div className="flex items-baseline justify-between">
+              <span className={`font-bold ${isRight ? 'text-slate-900' : 'text-slate-900'}`}>
+                {exp.role || 'Role'}
+              </span>
+              <span className={`text-[10px] ${isRight ? 'text-slate-500' : 'text-slate-400'}`}>
+                {exp.duration || ''}
+              </span>
+            </div>
+            <div className={`text-[11px] font-medium ${isRight ? 'text-slate-700' : 'text-slate-600'}`}>
+              {exp.company || ''}
+            </div>
+            <ul
+              className={`space-y-1.5 pl-4 list-disc mt-1 ${
+                isRight ? 'marker:text-emerald-500' : 'marker:text-slate-400'
+              }`}
+            >
+              {(exp.bullets || []).map((b, bIdx) => {
+                const matched = findRewriteForBullet(b);
+                if (isRight) {
+                  return (
+                    <li
+                      key={bIdx}
+                      className={`text-[11px] leading-relaxed transition-all ${
+                        matched
+                          ? 'bg-emerald-50/90 text-emerald-950 p-2 rounded-xl border border-emerald-300 shadow-2xs -ml-2 pl-2'
+                          : 'text-slate-700'
+                      }`}
+                    >
+                      {matched ? (
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5 text-[9px] font-extrabold text-emerald-700 uppercase tracking-wide">
+                            <Sparkles className="w-3 h-3 text-emerald-600" />
+                            <span>Google XYZ Formula Active</span>
+                          </div>
+                          <p className="font-semibold text-slate-900">
+                            {matched.rewrite_bullet}
+                          </p>
+                        </div>
+                      ) : (
+                        b
+                      )}
+                    </li>
+                  );
+                } else {
+                  return (
+                    <li
+                      key={bIdx}
+                      className={`text-[11px] leading-relaxed transition-all ${
+                        matched
+                          ? 'bg-amber-50 text-amber-900 p-1.5 rounded-lg border border-amber-200/80 -ml-2 pl-2'
+                          : 'text-slate-600'
+                      }`}
+                    >
+                      {matched ? (
+                        <div>
+                          <span className="text-[9px] font-bold text-amber-700 uppercase tracking-wider block mb-0.5">
+                            [Unquantified Original]
+                          </span>
+                          <span className="italic">{b}</span>
+                        </div>
+                      ) : (
+                        b
+                      )}
+                    </li>
+                  );
+                }
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const renderProjectsSection = (isRight = false) => {
+    if (!projects || projects.length === 0) return null;
+    return (
+      <div className="space-y-3">
+        <h3
+          className={`text-xs font-bold uppercase tracking-wider border-b pb-1 ${
+            isRight
+              ? isCorporate
+                ? 'text-sky-800 border-sky-200'
+                : 'text-slate-900 border-slate-200'
+              : 'text-slate-700 border-slate-100'
+          }`}
+        >
+          Projects
+        </h3>
+        {projects.map((proj, idx) => {
+          const title = proj.title || proj.name || 'Project';
+          const org = proj.organization || proj.company || '';
+          return (
+            <div key={idx} className="space-y-1">
+              <div className="flex items-baseline justify-between">
+                <span className={`font-bold ${isRight ? 'text-slate-900' : 'text-slate-800'}`}>
+                  {title}
+                  {org ? ` | ${org}` : ''}
+                </span>
+                {proj.duration && (
+                  <span className={`text-[10px] ${isRight ? 'text-slate-500' : 'text-slate-400'}`}>
+                    {proj.duration}
+                  </span>
+                )}
+              </div>
+              <ul
+                className={`space-y-1.5 pl-4 list-disc mt-1 ${
+                  isRight ? 'marker:text-emerald-500' : 'marker:text-slate-400'
+                }`}
+              >
+                {(proj.bullets || []).map((b, bIdx) => {
+                  const matched = findRewriteForBullet(b);
+                  if (isRight) {
+                    return (
+                      <li
+                        key={bIdx}
+                        className={`text-[11px] leading-relaxed transition-all ${
+                          matched
+                            ? 'bg-emerald-50/90 text-emerald-950 p-2 rounded-xl border border-emerald-300 shadow-2xs -ml-2 pl-2'
+                            : 'text-slate-700'
+                        }`}
+                      >
+                        {matched ? (
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-1.5 text-[9px] font-extrabold text-emerald-700 uppercase tracking-wide">
+                              <Sparkles className="w-3 h-3 text-emerald-600" />
+                              <span>Google XYZ Formula Active</span>
+                            </div>
+                            <p className="font-semibold text-slate-900">
+                              {matched.rewrite_bullet}
+                            </p>
+                          </div>
+                        ) : (
+                          b
+                        )}
+                      </li>
+                    );
+                  } else {
+                    return (
+                      <li
+                        key={bIdx}
+                        className={`text-[11px] leading-relaxed transition-all ${
+                          matched
+                            ? 'bg-amber-50 text-amber-900 p-1.5 rounded-lg border border-amber-200/80 -ml-2 pl-2'
+                            : 'text-slate-600'
+                        }`}
+                      >
+                        {matched ? (
+                          <div>
+                            <span className="text-[9px] font-bold text-amber-700 uppercase tracking-wider block mb-0.5">
+                              [Unquantified Original]
+                            </span>
+                            <span className="italic">{b}</span>
+                          </div>
+                        ) : (
+                          b
+                        )}
+                      </li>
+                    );
+                  }
+                })}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderLeadershipSection = (isRight = false) => {
+    if (!leadership || leadership.length === 0) return null;
+    return (
+      <div className="space-y-3">
+        <h3
+          className={`text-xs font-bold uppercase tracking-wider border-b pb-1 ${
+            isRight
+              ? isCorporate
+                ? 'text-sky-800 border-sky-200'
+                : 'text-slate-900 border-slate-200'
+              : 'text-slate-700 border-slate-100'
+          }`}
+        >
+          Leadership & Involvement
+        </h3>
+        {leadership.map((lead, idx) => {
+          const role = lead.role || lead.title || 'Leadership';
+          const org = lead.organization || lead.company || '';
+          return (
+            <div key={idx} className="space-y-1">
+              <div className="flex items-baseline justify-between">
+                <span className={`font-bold ${isRight ? 'text-slate-900' : 'text-slate-800'}`}>
+                  {role}
+                  {org ? ` | ${org}` : ''}
+                </span>
+                {lead.duration && (
+                  <span className={`text-[10px] ${isRight ? 'text-slate-500' : 'text-slate-400'}`}>
+                    {lead.duration}
+                  </span>
+                )}
+              </div>
+              <ul
+                className={`space-y-1.5 pl-4 list-disc mt-1 ${
+                  isRight ? 'marker:text-emerald-500' : 'marker:text-slate-400'
+                }`}
+              >
+                {(lead.bullets || []).map((b, bIdx) => {
+                  const matched = findRewriteForBullet(b);
+                  if (isRight) {
+                    return (
+                      <li
+                        key={bIdx}
+                        className={`text-[11px] leading-relaxed transition-all ${
+                          matched
+                            ? 'bg-emerald-50/90 text-emerald-950 p-2 rounded-xl border border-emerald-300 shadow-2xs -ml-2 pl-2'
+                            : 'text-slate-700'
+                        }`}
+                      >
+                        {matched ? (
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-1.5 text-[9px] font-extrabold text-emerald-700 uppercase tracking-wide">
+                              <Sparkles className="w-3 h-3 text-emerald-600" />
+                              <span>Google XYZ Formula Active</span>
+                            </div>
+                            <p className="font-semibold text-slate-900">
+                              {matched.rewrite_bullet}
+                            </p>
+                          </div>
+                        ) : (
+                          b
+                        )}
+                      </li>
+                    );
+                  } else {
+                    return (
+                      <li
+                        key={bIdx}
+                        className={`text-[11px] leading-relaxed transition-all ${
+                          matched
+                            ? 'bg-amber-50 text-amber-900 p-1.5 rounded-lg border border-amber-200/80 -ml-2 pl-2'
+                            : 'text-slate-600'
+                        }`}
+                      >
+                        {matched ? (
+                          <div>
+                            <span className="text-[9px] font-bold text-amber-700 uppercase tracking-wider block mb-0.5">
+                              [Unquantified Original]
+                            </span>
+                            <span className="italic">{b}</span>
+                          </div>
+                        ) : (
+                          b
+                        )}
+                      </li>
+                    );
+                  }
+                })}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderSkillsSection = (isRight = false) => {
+    if ((!skillsRawLines || skillsRawLines.length === 0) && (!skills || skills.length === 0)) return null;
+    return (
+      <div>
+        <h3
+          className={`text-xs font-bold uppercase tracking-wider border-b pb-1 mb-1.5 ${
+            isRight
+              ? isCorporate
+                ? 'text-sky-800 border-sky-200'
+                : 'text-slate-900 border-slate-200'
+              : 'text-slate-700 border-slate-100'
+          }`}
+        >
+          {isRight && isTech ? 'Technical Skills & Tooling' : 'Skills & Interests'}
+        </h3>
+        {skillsRawLines && skillsRawLines.length > 0 ? (
+          <div className="space-y-1.5 mt-1.5">
+            {skillsRawLines.map((line, idx) => {
+              if (line.includes(':')) {
+                const colonIdx = line.indexOf(':');
+                const cat = line.substring(0, colonIdx).trim();
+                const rest = line.substring(colonIdx + 1).trim();
+                return (
+                  <div key={idx} className="text-[11px] leading-relaxed">
+                    <span className={`font-bold ${isRight ? 'text-slate-900' : 'text-slate-800'}`}>
+                      {cat}:{' '}
+                    </span>
+                    <span className={isRight ? 'text-slate-700' : 'text-slate-600'}>
+                      {rest}
+                    </span>
+                  </div>
+                );
+              }
+              return (
+                <div key={idx} className={`text-[11px] ${isRight ? 'text-slate-700' : 'text-slate-600'}`}>
+                  {line}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            {skills.map((s, idx) => (
+              <span
+                key={idx}
+                className={`px-2 py-0.5 rounded-md text-[10px] font-medium ${
+                  isRight
+                    ? isTech
+                      ? 'bg-slate-100 text-slate-800 font-mono'
+                      : 'bg-slate-100 text-slate-800'
+                    : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                {s}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSection = (secKey, isRight = false) => {
+    switch (secKey) {
+      case 'education':
+        return <div key="education">{renderEducationSection(isRight)}</div>;
+      case 'experience':
+        return <div key="experience">{renderExperienceSection(isRight)}</div>;
+      case 'projects':
+        return <div key="projects">{renderProjectsSection(isRight)}</div>;
+      case 'leadership':
+        return <div key="leadership">{renderLeadershipSection(isRight)}</div>;
+      case 'skills':
+        return <div key="skills">{renderSkillsSection(isRight)}</div>;
+      default:
+        return null;
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true">
@@ -455,9 +862,10 @@ export default function ResumeOptimizerModal({
                           {candidateName}
                         </h2>
                         <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-2 gap-y-0.5 mt-1">
-                          {candidateEmail && <span>{candidateEmail}</span>}
-                          {candidatePhone && <span>• {candidatePhone}</span>}
+                          {candidatePhone && <span>Mobile: {candidatePhone}</span>}
+                          {candidateEmail && <span>{candidatePhone ? '• ' : ''}Email: {candidateEmail}</span>}
                           {candidateLinkedin && <span>• {candidateLinkedin}</span>}
+                          {candidateLocation && <span>• {candidateLocation}</span>}
                         </div>
                       </div>
 
@@ -471,85 +879,9 @@ export default function ResumeOptimizerModal({
                         </div>
                       )}
 
-                      {/* Experience */}
-                      {experiences.length > 0 && (
-                        <div className="space-y-3">
-                          <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider border-b border-slate-100 pb-1">
-                            Work Experience
-                          </h3>
-                          {experiences.map((exp, idx) => (
-                            <div key={idx} className="space-y-1">
-                              <div className="flex items-baseline justify-between">
-                                <span className="font-bold text-slate-900">{exp.role || 'Role'}</span>
-                                <span className="text-[10px] text-slate-400">{exp.duration || ''}</span>
-                              </div>
-                              <div className="text-[11px] text-slate-600 font-medium">{exp.company || ''}</div>
-                              <ul className="space-y-1.5 pl-4 list-disc marker:text-slate-400 mt-1">
-                                {(exp.bullets || []).map((b, bIdx) => {
-                                  const matched = findRewriteForBullet(b);
-                                  return (
-                                    <li
-                                      key={bIdx}
-                                      className={`text-[11px] leading-relaxed transition-all ${
-                                        matched
-                                          ? 'bg-amber-50 text-amber-900 p-1.5 rounded-lg border border-amber-200/80 -ml-2 pl-2'
-                                          : 'text-slate-600'
-                                      }`}
-                                    >
-                                      {matched ? (
-                                        <div>
-                                          <span className="text-[9px] font-bold text-amber-700 uppercase tracking-wider block mb-0.5">
-                                            [Unquantified Original]
-                                          </span>
-                                          <span className="italic">{b}</span>
-                                        </div>
-                                      ) : (
-                                        b
-                                      )}
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Education */}
-                      {education.length > 0 && (
-                        <div className="space-y-2">
-                          <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider border-b border-slate-100 pb-1">
-                            Education
-                          </h3>
-                          {education.map((edu, idx) => (
-                            <div key={idx} className="flex justify-between items-baseline text-[11px]">
-                              <div>
-                                <span className="font-bold text-slate-800">{edu.degree || 'Degree'}</span>
-                                <span className="text-slate-500"> — {edu.institution || ''}</span>
-                              </div>
-                              <span className="text-[10px] text-slate-400">{edu.year || ''}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Skills */}
-                      {skills.length > 0 && (
-                        <div>
-                          <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider border-b border-slate-100 pb-1 mb-1.5">
-                            Skills
-                          </h3>
-                          <div className="flex flex-wrap gap-1.5">
-                            {skills.map((s, idx) => (
-                              <span
-                                key={idx}
-                                className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-medium"
-                              >
-                                {s}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
+                      {/* All Original Sections: Education, Experience, Projects, Leadership, Skills */}
+                      {['education', 'experience', 'projects', 'leadership', 'skills'].map((sec) =>
+                        renderSection(sec, false)
                       )}
                     </div>
                   </div>
@@ -597,150 +929,25 @@ export default function ResumeOptimizerModal({
                             isIvy ? 'justify-center' : 'justify-start'
                           }`}
                         >
-                          {candidateEmail && <span>{candidateEmail}</span>}
-                          {candidatePhone && <span>• {candidatePhone}</span>}
+                          {candidatePhone && <span>Mobile: {candidatePhone}</span>}
+                          {candidateEmail && <span>{candidatePhone ? '• ' : ''}Email: {candidateEmail}</span>}
                           {candidateLinkedin && <span>• {candidateLinkedin}</span>}
+                          {candidateLocation && <span>• {candidateLocation}</span>}
                         </div>
                       </div>
 
-                      {/* Tech Minimalist orders Skills First */}
-                      {isTech && skills.length > 0 && (
+                      {/* Summary (if present and corporate) */}
+                      {summary && isCorporate && (
                         <div>
-                          <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider border-b border-slate-200 pb-1 mb-1.5">
-                            Technical Skills & Tooling
+                          <h3 className="text-xs font-bold text-sky-800 uppercase tracking-wider mb-1">
+                            Summary
                           </h3>
-                          <div className="flex flex-wrap gap-1.5">
-                            {skills.map((s, idx) => (
-                              <span
-                                key={idx}
-                                className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[10px] font-mono font-medium"
-                              >
-                                {s}
-                              </span>
-                            ))}
-                          </div>
+                          <p className="text-[11px] text-slate-600 leading-relaxed">{summary}</p>
                         </div>
                       )}
 
-                      {/* Ivy League orders Education First */}
-                      {isIvy && education.length > 0 && (
-                        <div className="space-y-2">
-                          <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider border-b border-slate-200 pb-1">
-                            Education
-                          </h3>
-                          {education.map((edu, idx) => (
-                            <div key={idx} className="flex justify-between items-baseline text-[11px]">
-                              <div>
-                                <span className="font-bold text-slate-900">{edu.degree || 'Degree'}</span>
-                                <span className="text-slate-600"> — {edu.institution || ''}</span>
-                              </div>
-                              <span className="text-[10px] text-slate-500 font-semibold">{edu.year || ''}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Work Experience with Google XYZ Rewrites Highlighted */}
-                      {experiences.length > 0 && (
-                        <div className="space-y-3">
-                          <h3
-                            className={`text-xs font-bold uppercase tracking-wider border-b pb-1 ${
-                              isCorporate
-                                ? 'text-sky-800 border-sky-200'
-                                : 'text-slate-900 border-slate-200'
-                            }`}
-                          >
-                            Professional Experience
-                          </h3>
-                          {experiences.map((exp, idx) => (
-                            <div key={idx} className="space-y-1">
-                              <div className="flex items-baseline justify-between">
-                                <span className="font-bold text-slate-900">{exp.role || 'Role'}</span>
-                                <span className="text-[10px] text-slate-500">{exp.duration || ''}</span>
-                              </div>
-                              <div className="text-[11px] text-slate-700 font-medium">{exp.company || ''}</div>
-                              <ul className="space-y-2 pl-4 list-disc marker:text-emerald-500 mt-1">
-                                {(exp.bullets || []).map((b, bIdx) => {
-                                  const matched = findRewriteForBullet(b);
-                                  return (
-                                    <li
-                                      key={bIdx}
-                                      className={`text-[11px] leading-relaxed transition-all ${
-                                        matched
-                                          ? 'bg-emerald-50/90 text-emerald-950 p-2 rounded-xl border border-emerald-300 shadow-2xs -ml-2 pl-2'
-                                          : 'text-slate-700'
-                                      }`}
-                                    >
-                                      {matched ? (
-                                        <div className="space-y-0.5">
-                                          <div className="flex items-center gap-1.5 text-[9px] font-extrabold text-emerald-700 uppercase tracking-wide">
-                                            <Sparkles className="w-3 h-3 text-emerald-600" />
-                                            <span>Google XYZ Formula Active</span>
-                                          </div>
-                                          <p className="font-semibold text-slate-900">
-                                            {matched.rewrite_bullet}
-                                          </p>
-                                        </div>
-                                      ) : (
-                                        b
-                                      )}
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Non-Ivy Education */}
-                      {!isIvy && education.length > 0 && (
-                        <div className="space-y-2">
-                          <h3
-                            className={`text-xs font-bold uppercase tracking-wider border-b pb-1 ${
-                              isCorporate
-                                ? 'text-sky-800 border-sky-200'
-                                : 'text-slate-900 border-slate-200'
-                            }`}
-                          >
-                            Education
-                          </h3>
-                          {education.map((edu, idx) => (
-                            <div key={idx} className="flex justify-between items-baseline text-[11px]">
-                              <div>
-                                <span className="font-bold text-slate-900">{edu.degree || 'Degree'}</span>
-                                <span className="text-slate-600"> — {edu.institution || ''}</span>
-                              </div>
-                              <span className="text-[10px] text-slate-500 font-semibold">{edu.year || ''}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Non-Tech Skills */}
-                      {!isTech && skills.length > 0 && (
-                        <div>
-                          <h3
-                            className={`text-xs font-bold uppercase tracking-wider border-b pb-1 mb-1.5 ${
-                              isCorporate
-                                ? 'text-sky-800 border-sky-200'
-                                : 'text-slate-900 border-slate-200'
-                            }`}
-                          >
-                            Core Competencies & Skills
-                          </h3>
-                          <div className="flex flex-wrap gap-1.5">
-                            {skills.map((s, idx) => (
-                              <span
-                                key={idx}
-                                className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[10px] font-medium"
-                              >
-                                {s}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                      {/* All Template Sections in Ordered Sequence */}
+                      {activeOrder.map((sec) => renderSection(sec, true))}
                     </div>
                   </div>
                 </div>

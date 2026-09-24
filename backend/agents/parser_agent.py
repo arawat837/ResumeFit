@@ -27,14 +27,17 @@ class ResumeParsedData(BaseModel):
     contact: Dict[str, str] = Field(default_factory=dict)
     summary: str = ""
     skills: List[str] = Field(default_factory=list)
+    skills_raw_lines: List[str] = Field(default_factory=list)
     experience: List[Dict[str, Any]] = Field(default_factory=list)
     education: List[Dict[str, Any]] = Field(default_factory=list)
+    projects: List[Dict[str, Any]] = Field(default_factory=list)
+    leadership: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ParserAgent:
     """
     Parser Agent: Converts raw resume text into structured JSON schema:
-    {contact, summary, skills[], experience[], education[]}
+    {contact, summary, skills[], skills_raw_lines[], experience[], education[], projects[], leadership[]}
     Uses native async Google GenAI client if available, with deterministic fallback.
     Returns: {"data": dict, "used_gemini": bool}
     """
@@ -48,14 +51,18 @@ class ParserAgent:
         # 1. Native asynchronous call with google-genai
         if self.gemini_client:
             prompt = (
-                "You are an expert resume parsing engine. Parse the following resume text into structured JSON.\n"
+                "You are an expert resume parsing engine. Parse the following resume text into comprehensive structured JSON.\n"
+                "CRITICAL REQUIREMENT: Do NOT omit any sections or bullets. Extract all experiences, projects, leadership, and education entries completely.\n"
                 "Return ONLY valid JSON matching this schema:\n"
                 "{\n"
-                '  "contact": {"name": "", "email": "", "phone": "", "linkedin": ""},\n'
+                '  "contact": {"name": "", "email": "", "phone": "", "linkedin": "", "location": ""},\n'
                 '  "summary": "",\n'
                 '  "skills": ["skill1", "skill2"],\n'
-                '  "experience": [{"role": "", "company": "", "duration": "", "bullets": ["bullet1"]}],\n'
-                '  "education": [{"institution": "", "degree": "", "year": ""}]\n'
+                '  "skills_raw_lines": ["Tools: Excel, Power BI", "Core Skills: Negotiation"],\n'
+                '  "education": [{"institution": "", "degree": "", "year": ""}],\n'
+                '  "experience": [{"role": "", "company": "", "duration": "", "bullets": ["bullet1", "bullet2"]}],\n'
+                '  "projects": [{"title": "", "organization": "", "duration": "", "bullets": ["bullet1"]}],\n'
+                '  "leadership": [{"role": "", "organization": "", "bullets": ["bullet1"]}]\n'
                 "}\n\n"
                 f"Resume Text:\n{clean_text}"
             )
@@ -96,16 +103,27 @@ class ParserAgent:
 
     def _fallback_parse(self, text: str) -> Dict[str, Any]:
         """
-        Deterministic, rule-based resume parsing using regular expressions and section boundary detection.
+        Deterministic, rule-based resume parsing extracting all sections:
+        Contact, Education (multi-tier), Experience, Projects, Leadership, and Skills.
         """
         lines = [line.strip() for line in text.split("\n") if line.strip()]
+        if not lines:
+            return ResumeParsedData().model_dump()
 
         # 1. Contact Info Extraction
         email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text)
-        phone_match = re.search(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", text)
+        phone_match = re.search(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}|\b\d{10}\b", text)
         linkedin_match = re.search(r"(?:linkedin\.com/in/[\w\-]+|linkedin\.com/[\w\-]+)", text, re.IGNORECASE)
 
-        name = lines[0] if lines else "Candidate"
+        location = ""
+        for line in lines[1:4]:
+            if any(c in line for c in ["@", "http", "www", "Mobile:", "Phone:"]):
+                continue
+            if re.search(r"\b[A-Za-z\s]+,\s*[A-Za-z\s]+\b", line):
+                location = line.strip()
+                break
+
+        name = lines[0]
         if len(name.split()) > 4 or any(c in name for c in ["@", "http", "www", "/"]):
             name = "Candidate"
 
@@ -114,84 +132,119 @@ class ParserAgent:
             "email": email_match.group(0) if email_match else "",
             "phone": phone_match.group(0) if phone_match else "",
             "linkedin": linkedin_match.group(0) if linkedin_match else "",
+            "location": location
         }
 
         # 2. Section Partitioning
-        sections = {
-            "summary": [],
-            "skills": [],
-            "experience": [],
-            "education": []
+        section_patterns = {
+            "education": re.compile(r"^(?:education|academic|qualifications)\b", re.IGNORECASE),
+            "experience": re.compile(r"^(?:experience|work\s+history|employment|professional\s+experience)\b", re.IGNORECASE),
+            "projects": re.compile(r"^(?:projects|academic\s+projects|key\s+projects)\b", re.IGNORECASE),
+            "leadership": re.compile(r"^(?:leadership|involvement|extracurricular|activities|leadership\s*&\s*involvement)\b", re.IGNORECASE),
+            "skills": re.compile(r"^(?:skills|technical\s+skills|core\s+skills|skills\s*&\s*interests|technologies)\b", re.IGNORECASE),
+            "summary": re.compile(r"^(?:summary|profile|about\s+me|objective)\b", re.IGNORECASE)
         }
 
-        current_section = "summary"
-        section_headers = {
-            "experience": re.compile(r"^(?:experience|work\s+history|employment|professional\s+experience|projects)\b", re.IGNORECASE),
-            "education": re.compile(r"^(?:education|academic\s+background|qualifications)\b", re.IGNORECASE),
-            "skills": re.compile(r"^(?:technical\s+skills|skills|core\s+competencies|technologies)\b", re.IGNORECASE),
-            "summary": re.compile(r"^(?:summary|profile|about\s+me|objective)\b", re.IGNORECASE),
-        }
+        sections = {k: [] for k in section_patterns}
+        current_sec = "summary"
 
-        for line in lines[1:]:  # skip first line as name
-            matched_new_section = False
-            for sec_name, pattern in section_headers.items():
-                if pattern.match(line):
-                    current_section = sec_name
-                    matched_new_section = True
+        for line in lines[1:]:
+            matched = False
+            for sec_name, pat in section_patterns.items():
+                if pat.match(line):
+                    current_sec = sec_name
+                    matched = True
                     break
-            if not matched_new_section:
-                sections[current_section].append(line)
+            if not matched:
+                sections[current_sec].append(line)
 
-        # 3. Skills parsing
-        skills_raw = " ".join(sections["skills"])
-        # Split on commas, bullets, pipes, or semicolons
-        skills_tokens = [s.strip(" •·-|*") for s in re.split(r"[,;|•\n]+", skills_raw) if s.strip(" •·-|*")]
-        # Deduplicate while preserving order
-        skills = list(dict.fromkeys([s for s in skills_tokens if len(s) > 1 and len(s) < 35]))
+        # Bullet recognition regex
+        bullet_regex = re.compile(r"^[\s\t]*([•\*\-\–\—\·\u2022\u25cf\uf0b7\uf0a7\u25aa\u25e6\u25cb\u2043\u2219\u2713]|\(\w+\)|\d+[\.\)])\s*")
 
-        # 4. Experience parsing
-        experience_items: List[Dict[str, Any]] = []
-        current_exp = None
-
-        for line in sections["experience"]:
-            cleaned_line = re.sub(r"^\(cid:\d+\)\s*", "• ", line).strip()
-            is_bullet = (
-                cleaned_line.startswith(("-", "*", "•", "–", "—", "·", "\u2022", "\u25cf", "\uf0b7"))
-                or bool(re.match(r"^\d+\.", cleaned_line))
-            )
-            if is_bullet:
-                bullet_clean = re.sub(r"^([-*•–—·\u2022\u25cf\uf0b7]|\d+\.)+\s*", "", cleaned_line).strip()
-                if current_exp:
-                    current_exp["bullets"].append(bullet_clean)
+        def parse_item_blocks(block_lines: List[str]) -> List[Dict[str, Any]]:
+            items: List[Dict[str, Any]] = []
+            curr: Optional[Dict[str, Any]] = None
+            for raw_line in block_lines:
+                cleaned = re.sub(r"^\(cid:\d+\)\s*", "• ", raw_line).strip()
+                is_bullet = bool(bullet_regex.match(cleaned))
+                if is_bullet:
+                    bullet_clean = bullet_regex.sub("", cleaned).strip()
+                    if curr is None:
+                        curr = {"title": "Experience", "subtitle": "", "duration": "", "bullets": []}
+                    curr["bullets"].append(bullet_clean)
                 else:
-                    current_exp = {"role": "Experience", "company": "", "duration": "", "bullets": [bullet_clean]}
-            else:
-                if current_exp and current_exp["bullets"]:
-                    experience_items.append(current_exp)
-                current_exp = {"role": line, "company": "", "duration": "", "bullets": []}
+                    if curr and (curr["bullets"] or curr.get("title")):
+                        items.append(curr)
+                    # Extract date
+                    dur_match = re.search(r"(\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*\d{4}\s*[-–—]\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?[a-z]*\s*\d{4}|\b20\d\d\s*[-–—]\s*20\d\d|\b20\d\d\b)", raw_line, re.IGNORECASE)
+                    dur_str = dur_match.group(0) if dur_match else ""
+                    clean_title = raw_line.replace(dur_str, "").strip() if dur_str else raw_line
+                    curr = {"title": clean_title, "subtitle": "", "duration": dur_str, "bullets": []}
 
-        if current_exp and (current_exp["bullets"] or current_exp["role"]):
-            experience_items.append(current_exp)
+            if curr and (curr["bullets"] or curr.get("title")):
+                items.append(curr)
+            return items
 
-        # 5. Education parsing
+        # 3. Education Parsing
         education_items: List[Dict[str, Any]] = []
         edu_lines = sections["education"]
-        if edu_lines:
-            degree = ""
-            institution = edu_lines[0]
-            year = ""
-            for line in edu_lines:
-                if re.search(r"\b(bachelor|master|b\.s|m\.s|b\.a|bba|phd|degree)\b", line, re.IGNORECASE):
-                    degree = line
-                year_match = re.search(r"\b(20\d\d|19\d\d)\b", line)
-                if year_match:
-                    year = year_match.group(0)
+        i = 0
+        while i < len(edu_lines):
+            line = edu_lines[i]
+            dur_match = re.search(r"(\b20\d\d\s*[-–—]\s*20\d\d|\b20\d\d\b)", line)
+            duration = dur_match.group(0) if dur_match else ""
+            clean_inst = line.replace(duration, "").strip()
+
+            sub = ""
+            if i + 1 < len(edu_lines) and not re.search(r"\b(School|College|University|Vidyapith|Institute)\b", edu_lines[i+1], re.IGNORECASE):
+                sub = edu_lines[i+1]
+                i += 1
+                if not duration:
+                    d2 = re.search(r"(\b20\d\d\s*[-–—]\s*20\d\d|\b20\d\d\b)", sub)
+                    if d2:
+                        duration = d2.group(0)
+                        sub = sub.replace(duration, "").strip()
 
             education_items.append({
-                "institution": institution,
-                "degree": degree or "Degree Program",
-                "year": year
+                "institution": clean_inst,
+                "degree": sub or "Degree Program",
+                "year": duration
             })
+            i += 1
+
+        # 4. Experience Parsing
+        experience_items: List[Dict[str, Any]] = []
+        for it in parse_item_blocks(sections["experience"]):
+            experience_items.append({
+                "role": it["title"],
+                "company": it.get("subtitle", ""),
+                "duration": it.get("duration", ""),
+                "bullets": it["bullets"]
+            })
+
+        # 5. Projects Parsing
+        project_items: List[Dict[str, Any]] = []
+        for it in parse_item_blocks(sections["projects"]):
+            project_items.append({
+                "title": it["title"],
+                "organization": it.get("subtitle", ""),
+                "duration": it.get("duration", ""),
+                "bullets": it["bullets"]
+            })
+
+        # 6. Leadership Parsing
+        leadership_items: List[Dict[str, Any]] = []
+        for it in parse_item_blocks(sections["leadership"]):
+            leadership_items.append({
+                "role": it["title"],
+                "organization": it.get("subtitle", ""),
+                "bullets": it["bullets"]
+            })
+
+        # 7. Skills Parsing
+        skills_raw_lines = sections["skills"]
+        skills_tokens = [s.strip(" •·-|*") for s in re.split(r"[,;|•\n]+", " ".join(skills_raw_lines)) if s.strip(" •·-|*")]
+        skills = list(dict.fromkeys([s for s in skills_tokens if 1 < len(s) < 40]))
 
         summary_text = " ".join(sections["summary"][:4]).strip()
 
@@ -199,6 +252,9 @@ class ParserAgent:
             "contact": contact,
             "summary": summary_text,
             "skills": skills,
+            "skills_raw_lines": skills_raw_lines,
             "experience": experience_items,
             "education": education_items,
+            "projects": project_items,
+            "leadership": leadership_items
         }
