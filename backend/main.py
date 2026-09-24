@@ -8,7 +8,9 @@ from config import (
     GEMINI_API_KEY,
     GEMINI_MODEL,
     MAX_UPLOAD_SIZE_BYTES,
-    ALLOWED_ORIGINS
+    ALLOWED_ORIGINS,
+    ALLOW_CREDENTIALS,
+    IS_CORS_FALLBACK
 )
 from presets.roles import ROLE_PRESETS
 from parsers import PDFParser, DOCXParser
@@ -24,10 +26,18 @@ app = FastAPI(
 )
 
 # CORS setup
+if IS_CORS_FALLBACK:
+    logger.warning(
+        "⚠️ CORS WARNING: ALLOWED_ORIGINS is unset or wildcard '*'. "
+        "Falling back to local dev origins %s with allow_credentials=False. "
+        "For production (e.g. Render), set ALLOWED_ORIGINS to your frontend domain (e.g. https://resume-fit-peach.vercel.app).",
+        ALLOWED_ORIGINS
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

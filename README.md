@@ -14,10 +14,10 @@
   - [Concurrency & Performance](#concurrency--performance)
   - [Resilience & Retry Loop](#resilience--retry-loop)
 - [Scoring Metrics & Mathematical Rubric](#scoring-metrics--mathematical-rubric)
-  - [1. Keyword Match (40%)](#1-keyword-match-40-weight)
+  - [1. Keyword Match (35%)](#1-keyword-match-35-weight)
   - [2. Formatting Hygiene (20%)](#2-formatting-hygiene-20-weight)
   - [3. Section Completeness (20%)](#3-section-completeness-20-weight)
-  - [4. Quantified Achievements (20%)](#4-quantified-achievements-20-weight)
+  - [4. Quantified Achievements (25%)](#4-quantified-achievements-25-weight)
 - [Engine Attribution Contract](#engine-attribution-contract)
 - [Project Structure](#project-structure)
 - [Quickstart & Local Setup](#quickstart--local-setup)
@@ -82,7 +82,7 @@ flowchart TD
     end
 
     subgraph Step3["Step 3: Deterministic Scoring"]
-        ScoringAgent["3. Scoring Agent (100% Deterministic Rubric)\nKeyword (40) + Formatting (20) + Sections (20) + Metrics (20)"]
+        ScoringAgent["3. Scoring Agent (100% Deterministic Rubric)\nKeyword (35%) + Formatting (20%) + Sections (20%) + Achievements (25%)"]
     end
 
     subgraph Step4["Step 4: AI Recommendations"]
@@ -145,49 +145,51 @@ for attempt in range(3):
 
 ## Scoring Metrics & Mathematical Rubric
 
-The overall ATS score is an integer between **0 and 100**, computed by summing four weighted categories:
+The overall ATS score is an integer between **0 and 100**, computed as a weighted composite of four normalized category scores (each 0–100):
 
-$$\text{ATS Score} = \text{Keyword Match (40)} + \text{Formatting (20)} + \text{Sections (20)} + \text{Achievements (20)}$$
+$$\text{ATS Score} = \text{round}\left(0.35 \times \text{Keyword} + 0.20 \times \text{Formatting} + 0.20 \times \text{Sections} + 0.25 \times \text{Achievements}\right)$$
 
-### 1. Keyword Match (40% Weight)
-Measures alignment between the candidate's skills and target job requirements:
-- **Preset / Custom JD Mode**: Extracts required technical proficiencies, tools, and domain keywords from the JD. Compares against resume skills and experience bullets:
-  $$\text{Keyword Score} = \min\left(40, \; 40 \times \frac{\text{Keywords Matched}}{\max(\text{Total Target Keywords}, 1)}\right)$$
-- **General ATS Mode**: Evaluates resume against universal core competencies (Python, SQL, Excel, Git, Project Management, Communication, Problem Solving).
+### 1. Keyword Match (35% Weight)
+Measures alignment between the candidate's skills and target job requirements (scored 0–100):
+- **Preset / Custom JD Mode**: Extracts required technical proficiencies, tools, and domain keywords from the JD. Evaluates overlap against resume skills and experience:
+  $$\text{Keyword Score} = \max\left(15, \; \min\left(100, \; \text{round}\left(\frac{\text{Matched Keywords}}{\text{Total Target Keywords}} \times 100\right)\right)\right)$$
+- **General ATS Mode**: Evaluates core university competency density and detected technical skills against standard ATS benchmarks:
+  $$\text{Keyword Score} = \max\left(25, \; \min\left(95, \; 50 + \min(30, 3 \times \text{skill\_count}) + \min(20, 3 \times \text{matched\_benchmarks})\right)\right)$$
 
 ### 2. Formatting Hygiene (20% Weight)
-Ensures the document can be parsed cleanly by traditional parser engines without layout distortion:
-- **Multi-Column Layout Penalty (-15 pts)**: Flagged if multi-column text blocks or adjacent table cells are detected.
-- **Table Structure Penalty (-10 pts)**: Flagged if complex nested tables are used for visual layout.
-- **Total Bullet Floor (+15 to +20 pts)**: Rewards balanced bullet structures (at least 3–5 bullets per experience entry).
+Ensures the document can be parsed cleanly by traditional ATS parser engines without text distortion (scored 0–100):
+- Starts with a baseline of **100 points**.
+- **Table Structure Penalty (-15 pts)**: Flagged if table structures are detected (frequently scrambles ATS text extraction order).
+- **Embedded Image Penalty (-15 pts)**: Flagged if graphics or image counts $> 0$ (ATS cannot read embedded text in images).
+- **Multi-Column Layout Penalty (-15 pts)**: Flagged if multi-column layout is detected (out-of-order reading risk).
+- **Length Penalties**: Document text under 600 characters (-20 pts); text over 6,000 characters (-10 pts).
+- Category score bounded to $[20, 100]$.
 
 ### 3. Section Completeness (20% Weight)
-Validates the presence of standard ATS heading sections:
-- **Contact Information (5 pts)**: Name (2 pts), Email (1 pt), Phone (1 pt), LinkedIn/Portfolio (1 pt).
-- **Work Experience / Projects (5 pts)**: Clear employer/project names, role titles, and date ranges.
-- **Education Section (5 pts)**: Degree, institution name, and graduation year.
-- **Skills Section (5 pts)**: Dedicated skills section containing detected technical and soft skills.
+Validates the presence of the 4 core ATS heading sections (25 points each, scored 0–100):
+- **Contact Information (25 pts)**: Validates presence of email or phone number.
+- **Education Section (25 pts)**: Degree, institution, and graduation year details.
+- **Work Experience / Projects (25 pts)**: Roles, company/project titles, and experience bullets.
+- **Skills Section (25 pts)**: Dedicated section containing technical proficiencies and competencies.
 
-### 4. Quantified Achievements (20% Weight)
+### 4. Quantified Achievements (25% Weight)
 Evaluates whether experience bullets demonstrate measurable business or technical outcomes rather than passive task descriptions:
-- **Strict Metric Regex**: To prevent false positives from bare numbers (e.g., *"team of 5"*, *"graduated in 2023"*), matches require an explicit quantification signal:
+- **Strict Metric Regex**: Matches require explicit quantification signals (percentages, currencies, multipliers, duration units):
   ```python
-  METRIC_PATTERN = re.compile(
-      r"(?:"
-      r"\d+(\.\d+)?\s*%"                    # Percentages: 35%, 12.5 %
-      r"|\$\d+(\.\d+)?[kKmMbB]?"            # Currency: $500, $2.5M
-      r"|\b\d+(\.\d+)?\s*[xX]\b"            # Multipliers: 3x, 10X
-      r"|\b\d+\s*(?:hrs?|hours?|days?|weeks?|months?)\b" # Time savings: 4 hours, 2 weeks
-      r"|\b\d+[kKmMbB]\b"                   # Quantities: 500k, 10M
+  metric_pattern = re.compile(
+      r"("
+      r"\b\d+(?:\.\d+)?\s*%"                                                            # Percentages: 20%, 3.5 %
+      r"|\$(?:\d+(?:\.\d+)?|\d{1,3}(?:,\d{3})+)(?:[kKmMbB])?\b"                          # Currency: $500, $12k, $1.5M
+      r"|\b\d+(?:\.\d+)?\s*[xX]\b"                                                      # Multipliers: 3x, 2.5X
+      r"|\b\d+(?:\.\d+)?\s*(?:[kKmMbB]|hrs?|hours?|days?|weeks?|months?|mins?|minutes?)\b" # Units: 10 hrs, 4 weeks, 50k
       r")"
   )
   ```
-- **Scoring Scale**:
-  - $\ge 60\%$ of bullets quantified: **20 points**
-  - $40\% - 59\%$ of bullets quantified: **16 points**
-  - $20\% - 39\%$ of bullets quantified: **12 points**
-  - $> 0\%$ of bullets quantified: **8 points**
-  - $0\%$ quantified: **0 points**
+- **Action Verb Matcher**: Checks bullet starting verbs against a curated vocabulary of 56 strong action verbs (e.g., *accelerated*, *spearheaded*, *automated*, *optimized*).
+- **Continuous Ratio Formula**:
+  Computes continuous metric density ratio ($\text{metric\_ratio} = \frac{\text{metric\_bullets}}{\text{total\_bullets}}$) and action verb ratio ($\text{verb\_ratio} = \frac{\text{action\_bullets}}{\text{total\_bullets}}$):
+  $$\text{Achievements Score} = \max\left(20, \; \min\left(100, \; \text{round}\left((0.60 \times \text{metric\_ratio} + 0.40 \times \text{verb\_ratio}) \times 100\right)\right)\right)$$
+  *(If no experience bullets are found, defaults to a baseline of 30).*
 
 ---
 
@@ -358,7 +360,7 @@ cd backend
 4. Add Environment Variables:
    - `GEMINI_API_KEY`: `your_gemini_api_key`
    - `GEMINI_MODEL`: `gemini-3.1-flash-lite`
-   - `ALLOWED_ORIGINS`: `*` (or your Vercel URL)
+   - `ALLOWED_ORIGINS`: your frontend URL (e.g., `https://resume-fit-peach.vercel.app`)
 5. Copy your deployed URL (e.g., `https://resumefit-api.onrender.com`).
 
 ### Frontend Deployment (Vercel)

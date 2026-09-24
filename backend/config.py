@@ -20,17 +20,32 @@ MAX_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024  # 5,242,880 bytes
 # Minimum text characters required for a valid resume (scanned PDF threshold)
 MIN_TEXT_CHARS = 50
 
-# CORS Origins
+# CORS Configuration
+# Safe local development origins
+LOCAL_DEV_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
 raw_origins = os.getenv("ALLOWED_ORIGINS")
-if raw_origins:
-    ALLOWED_ORIGINS = [orig.strip() for orig in raw_origins.split(",") if orig.strip()]
+parsed_origins = [
+    orig.strip()
+    for orig in (raw_origins.split(",") if raw_origins else [])
+    if orig.strip()
+]
+
+# Only treat as explicitly configured if there is at least one non-wildcard origin
+has_explicit_domains = bool(parsed_origins) and any(o != "*" for o in parsed_origins)
+
+if has_explicit_domains:
+    # Explicit real domain(s) configured: allow credentials, strip any accidental wildcard
+    ALLOWED_ORIGINS = [o for o in parsed_origins if o != "*"]
+    ALLOW_CREDENTIALS = True
+    IS_CORS_FALLBACK = False
 else:
-    ALLOWED_ORIGINS = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://*.vercel.app",
-        "*"
-    ]
+    # Safe default: local dev only, disable credentials, never wildcard
+    ALLOWED_ORIGINS = LOCAL_DEV_ORIGINS
+    ALLOW_CREDENTIALS = False
+    IS_CORS_FALLBACK = True
+
 

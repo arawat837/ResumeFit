@@ -342,3 +342,34 @@ async def test_concurrency_timing_parser_and_jd_agents():
     }
 
 
+def test_cors_fallback_behavior():
+    """Confirms CORS rejects unauthorized external origins on default fallback and disables credentials."""
+    from config import ALLOWED_ORIGINS, ALLOW_CREDENTIALS, IS_CORS_FALLBACK
+    assert "http://localhost:5173" in ALLOWED_ORIGINS
+    assert "*" not in ALLOWED_ORIGINS
+    assert ALLOW_CREDENTIALS is False
+    assert IS_CORS_FALLBACK is True
+
+    # 1. Unauthorized origin preflight request must not receive allow-origin
+    res_unauth = client.options(
+        "/api/health",
+        headers={
+            "Origin": "https://malicious-site.com",
+            "Access-Control-Request-Method": "GET"
+        }
+    )
+    assert "access-control-allow-origin" not in res_unauth.headers
+
+    # 2. Local dev origin preflight receives allow-origin without allow-credentials
+    res_local = client.options(
+        "/api/health",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET"
+        }
+    )
+    assert res_local.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    assert "access-control-allow-credentials" not in res_local.headers
+
+
+
