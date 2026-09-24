@@ -71,9 +71,9 @@ SAMPLE_PAYLOAD = {
     ]
 }
 
-def test_export_all_three_templates_docx(setup_test_db):
+def test_export_all_templates_docx_including_original(setup_test_db):
     token = setup_test_db["token"]
-    for template_id in ["ivy_league", "tech_minimalist", "modern_corporate"]:
+    for template_id in ["original", "ivy_league", "tech_minimalist", "modern_corporate"]:
         payload = {**SAMPLE_PAYLOAD, "format": "docx", "template_id": template_id}
         res = client.post("/api/resume/export", json=payload, headers={"Authorization": f"Bearer {token}"})
         assert res.status_code == 200
@@ -81,12 +81,41 @@ def test_export_all_three_templates_docx(setup_test_db):
         assert f"Alex_Mercer_{template_id}_Optimized.docx" in res.headers["content-disposition"]
         assert len(res.content) > 1000
 
-def test_export_all_three_templates_pdf(setup_test_db):
+def test_export_all_templates_pdf_including_original(setup_test_db):
     token = setup_test_db["token"]
-    for template_id in ["ivy_league", "tech_minimalist", "modern_corporate"]:
+    for template_id in ["original", "ivy_league", "tech_minimalist", "modern_corporate"]:
         payload = {**SAMPLE_PAYLOAD, "format": "pdf", "template_id": template_id}
         res = client.post("/api/resume/export", json=payload, headers={"Authorization": f"Bearer {token}"})
         assert res.status_code == 200
         assert res.headers["content-type"] == "application/pdf"
         assert f"Alex_Mercer_{template_id}_Optimized.pdf" in res.headers["content-disposition"]
         assert len(res.content) > 1000
+
+def test_export_custom_docx_template(setup_test_db):
+    import io, base64
+    from docx import Document
+    token = setup_test_db["token"]
+
+    # Create dummy custom docx
+    custom_doc = Document()
+    custom_doc.add_heading("Custom College Format", 0)
+    p = custom_doc.add_paragraph("Helped team improve search database query times by adding indexes.")
+    buf = io.BytesIO()
+    custom_doc.save(buf)
+    b64_content = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    payload = {
+        **SAMPLE_PAYLOAD,
+        "format": "docx",
+        "template_id": "custom",
+        "custom_template_base64": b64_content
+    }
+    res = client.post("/api/resume/export", json=payload, headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    assert "CustomTemplate_Optimized.docx" in res.headers["content-disposition"]
+    
+    # Read output and verify bullet was replaced in place
+    exported_doc = Document(io.BytesIO(res.content))
+    full_text = "\n".join(p.text for p in exported_doc.paragraphs)
+    assert "Optimized database query performance by 42%" in full_text
+

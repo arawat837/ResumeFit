@@ -65,8 +65,9 @@ def test_get_templates():
     res = client.get("/api/resume/templates")
     assert res.status_code == 200
     data = res.json()
-    assert len(data) == 3
+    assert len(data) >= 4
     ids = [t["id"] for t in data]
+    assert "original" in ids
     assert "ivy_league" in ids
     assert "tech_minimalist" in ids
     assert "modern_corporate" in ids

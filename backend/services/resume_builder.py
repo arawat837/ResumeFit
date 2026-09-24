@@ -20,6 +20,18 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 
 
 CURATED_TEMPLATES = {
+    "original": {
+        "id": "original",
+        "name": "Keep Original Format",
+        "subtitle": "Your Existing Resume Layout",
+        "desc": "Preserves your exact resume structure & section order; makes surgical in-place bullet replacements only.",
+        "font_docx": "Calibri",
+        "font_pdf": "Helvetica",
+        "font_pdf_bold": "Helvetica-Bold",
+        "accent_hex": "#0F172A",
+        "align": "left",
+        "order": ["experience", "education", "skills"]
+    },
     "ivy_league": {
         "id": "ivy_league",
         "name": "Ivy League / Classic University",
@@ -94,6 +106,52 @@ def apply_bullet_rewrites(
         updated_experience.append(new_exp)
 
     return updated_experience
+
+
+def apply_rewrites_to_custom_docx(
+    custom_docx_bytes: bytes,
+    applied_rewrites: List[Dict[str, Any]]
+) -> bytes:
+    """Takes an uploaded custom .docx file and applies Google XYZ bullet rewrites in place."""
+    doc = Document(io.BytesIO(custom_docx_bytes))
+
+    replacements = []
+    for rw in applied_rewrites:
+        orig = (rw.get("original_bullet") or "").strip()
+        new_b = (rw.get("rewrite_bullet") or "").strip()
+        if orig and new_b:
+            replacements.append((orig, new_b))
+
+    def replace_in_paragraphs(paragraphs):
+        for p in paragraphs:
+            text = p.text
+            if not text.strip():
+                continue
+            for orig, new_b in replacements:
+                clean_orig = orig.lstrip("-•* ").strip()
+                if clean_orig and clean_orig.lower() in text.lower():
+                    idx = text.lower().find(clean_orig.lower())
+                    if idx != -1:
+                        target_substring = text[idx:idx + len(clean_orig)]
+                        p.text = text.replace(target_substring, new_b)
+                        text = p.text
+                elif orig and orig.lower() in text.lower():
+                    idx = text.lower().find(orig.lower())
+                    if idx != -1:
+                        target_substring = text[idx:idx + len(orig)]
+                        p.text = text.replace(target_substring, new_b)
+                        text = p.text
+
+    replace_in_paragraphs(doc.paragraphs)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                replace_in_paragraphs(cell.paragraphs)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
 
 
 def build_docx_resume(
