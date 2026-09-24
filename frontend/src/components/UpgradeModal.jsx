@@ -182,7 +182,7 @@ export default function UpgradeModal({ isOpen, onClose, onOpenAuth }) {
                 required
                 value={promoCode}
                 onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
-                placeholder="e.g. CAMPUS2026 or TEACHERVIP"
+                placeholder="Enter promo code"
                 className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-xs uppercase font-mono font-semibold placeholder:font-sans placeholder:normal-case placeholder:font-normal focus:outline-none focus:ring-2 focus:ring-brand-500"
               />
               <button
@@ -197,10 +197,6 @@ export default function UpgradeModal({ isOpen, onClose, onOpenAuth }) {
                 )}
               </button>
             </form>
-
-            <p className="text-[11px] text-slate-400 leading-tight">
-              Tip: Team members & instructors can use code <code className="bg-slate-200 px-1 py-0.5 rounded text-slate-700">CAMPUS2026</code> or <code className="bg-slate-200 px-1 py-0.5 rounded text-slate-700">TEACHERVIP</code>.
-            </p>
           </div>
         )}
       </div>
