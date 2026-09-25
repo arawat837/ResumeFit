@@ -179,3 +179,77 @@ def test_redeem_teacher_vip_code():
     )
     assert redeem_res.status_code == 200
     assert redeem_res.json()["user"]["is_pro"] is True
+
+
+def test_google_auth_missing_token():
+    res = client.post("/api/auth/google", json={})
+    assert res.status_code == 400
+    assert "Missing Google authentication token" in res.json()["detail"]
+
+
+def test_google_auth_new_user(monkeypatch):
+    from routers import auth as auth_module
+
+    async def mock_fetch(credential, access_token):
+        return {
+            "email": "newgoogleuser@gmail.com",
+            "name": "Google Newbie",
+            "picture": "https://example.com/photo.jpg"
+        }
+
+    monkeypatch.setattr(auth_module, "fetch_google_user_info", mock_fetch)
+
+    res = client.post("/api/auth/google", json={"access_token": "valid_mock_access_token"})
+    assert res.status_code == 200
+    data = res.json()
+    assert "token" in data
+    assert data["user"]["email"] == "newgoogleuser@gmail.com"
+    assert data["user"]["name"] == "Google Newbie"
+    assert data["user"]["is_pro"] is False
+
+    # Verify session token works with /me
+    me_res = client.get("/api/auth/me", headers={"Authorization": f"Bearer {data['token']}"})
+    assert me_res.status_code == 200
+    assert me_res.json()["user"]["email"] == "newgoogleuser@gmail.com"
+
+
+def test_google_auth_existing_user(monkeypatch):
+    # Register user first via email
+    client.post(
+        "/api/auth/signup",
+        json={"name": "Existing User", "email": "existing@gmail.com", "password": "password123"}
+    )
+
+    from routers import auth as auth_module
+
+    async def mock_fetch(credential, access_token):
+        return {
+            "email": "existing@gmail.com",
+            "name": "Existing User",
+            "picture": None
+        }
+
+    monkeypatch.setattr(auth_module, "fetch_google_user_info", mock_fetch)
+
+    res = client.post("/api/auth/google", json={"credential": "mock_id_token"})
+    assert res.status_code == 200
+    data = res.json()
+    assert "token" in data
+    assert data["user"]["email"] == "existing@gmail.com"
+
+
+def test_google_auth_invalid_token(monkeypatch):
+    import httpx
+    from fastapi import HTTPException
+
+    from routers import auth as auth_module
+
+    async def mock_fetch(credential, access_token):
+        raise HTTPException(status_code=401, detail="Invalid or expired Google access token.")
+
+    monkeypatch.setattr(auth_module, "fetch_google_user_info", mock_fetch)
+
+    res = client.post("/api/auth/google", json={"access_token": "bad_token"})
+    assert res.status_code == 401
+    assert "Invalid or expired" in res.json()["detail"]
+

@@ -61,4 +61,7 @@ JWT_EXPIRATION_DAYS = 30  # 30-day persistent sessions
 raw_promo_codes = os.getenv("PROMO_CODES", "CAMPUS2026,TEACHERVIP,TEAMPRO,RESUMEFIT_PRO,STUDENTVIP")
 VALID_PROMO_CODES = [c.strip().upper() for c in raw_promo_codes.split(",") if c.strip()]
 
+# Google OAuth Configuration
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+
 

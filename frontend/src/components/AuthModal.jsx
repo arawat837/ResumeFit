@@ -1,20 +1,52 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Mail, Lock, User, Sparkles, AlertCircle, Loader2, CheckCircle2, ArrowRight } from 'lucide-react';
+import {
+  X,
+  Mail,
+  Lock,
+  User,
+  Sparkles,
+  AlertCircle,
+  Loader2,
+  CheckCircle2,
+  ArrowRight,
+  ArrowLeft,
+  ExternalLink,
+  Settings2,
+  Key
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import {
+  triggerGoogleAccountPicker,
+  getGoogleClientId,
+  saveGoogleClientId
+} from '../services/googleAuth';
 
 export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
-  const { login, signup } = useAuth();
+  const { login, signup, loginGoogle } = useAuth();
   const [mode, setMode] = useState('login'); // 'login' | 'signup'
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [showGoogleSetup, setShowGoogleSetup] = useState(false);
+  const [googleClientIdInput, setGoogleClientIdInput] = useState('');
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
 
   const modalRef = useRef(null);
   const emailInputRef = useRef(null);
+
+  // Initialize or reload saved Google Client ID when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setGoogleClientIdInput(getGoogleClientId());
+      setError(null);
+      setSuccessMsg(null);
+      setShowGoogleSetup(false);
+    }
+  }, [isOpen]);
 
   // Focus management & Escape key
   useEffect(() => {
@@ -37,7 +69,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
       clearTimeout(timer);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, mode, onClose]);
+  }, [isOpen, mode, onClose, showGoogleSetup]);
 
   if (!isOpen) return null;
 
@@ -73,13 +105,72 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
     }
   };
 
-  const handleGoogleSimulator = () => {
-    // Quick demo autofill for Google/Gmail users
+  const handleGoogleClick = () => {
+    setError(null);
+    setSuccessMsg(null);
+
+    const configuredClientId = getGoogleClientId();
+    if (!configuredClientId) {
+      // If no Google Client ID is configured yet, guide user through setup
+      setShowGoogleSetup(true);
+      return;
+    }
+
+    launchGooglePicker(configuredClientId);
+  };
+
+  const launchGooglePicker = (clientIdToUse) => {
+    setGoogleLoading(true);
+    setError(null);
+
+    triggerGoogleAccountPicker({
+      clientId: clientIdToUse,
+      onSuccess: async ({ access_token, credential }) => {
+        try {
+          const res = await loginGoogle({ access_token, credential });
+          setSuccessMsg(`Signed in with Google as ${res.user?.email || 'authenticated user'}!`);
+          setTimeout(() => {
+            if (onAuthSuccess) onAuthSuccess();
+            onClose();
+          }, 700);
+        } catch (err) {
+          setError(err.message || 'Google sign-in failed. Please try again.');
+        } finally {
+          setGoogleLoading(false);
+        }
+      },
+      onError: (err) => {
+        setGoogleLoading(false);
+        if (err.code === 'MISSING_CLIENT_ID') {
+          setShowGoogleSetup(true);
+        } else {
+          setError(err.message || 'Failed to open Google account selection box.');
+        }
+      }
+    });
+  };
+
+  const handleSaveGoogleClientIdAndContinue = (e) => {
+    e.preventDefault();
+    const cleanId = googleClientIdInput.trim();
+    if (!cleanId) {
+      setError('Please enter a valid Google Client ID.');
+      return;
+    }
+    saveGoogleClientId(cleanId);
+    setShowGoogleSetup(false);
+    launchGooglePicker(cleanId);
+  };
+
+  const handleUseDemoAccount = () => {
+    setShowGoogleSetup(false);
     setEmail('student.demo@gmail.com');
     if (mode === 'signup' && !name) {
       setName('University Student');
     }
+    setPassword('demo123456');
     setError(null);
+    setSuccessMsg('Filled demo student credentials. Click the button below to continue.');
   };
 
   return (
@@ -103,10 +194,18 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
               </div>
               <div>
                 <h3 className="text-lg font-bold text-slate-900">
-                  {mode === 'login' ? 'Sign In to ResumeFit' : 'Create Free Account'}
+                  {showGoogleSetup
+                    ? 'Google Sign-In Setup'
+                    : mode === 'login'
+                    ? 'Sign In to ResumeFit'
+                    : 'Create Free Account'}
                 </h3>
                 <p className="text-xs text-slate-400">
-                  {mode === 'login' ? 'Access your Pro features and history' : 'Save your progress and activate Pro permanently'}
+                  {showGoogleSetup
+                    ? 'Connect your Google Cloud OAuth Client ID'
+                    : mode === 'login'
+                    ? 'Access your Pro features and history'
+                    : 'Save your progress and activate Pro permanently'}
                 </p>
               </div>
             </div>
@@ -120,47 +219,41 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
             </button>
           </div>
 
-          {/* Mode Switcher Tabs */}
-          <div className="flex border-b border-slate-100 p-1.5 bg-slate-50/70">
-            <button
-              type="button"
-              onClick={() => {
-                setMode('login');
-                setError(null);
-              }}
-              className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all ${
-                mode === 'login'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              Sign In
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMode('signup');
-                setError(null);
-              }}
-              className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all ${
-                mode === 'signup'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              Create Account
-            </button>
-          </div>
+          {/* Mode Switcher Tabs (Only when not in Google Setup screen) */}
+          {!showGoogleSetup && (
+            <div className="flex border-b border-slate-100 p-1.5 bg-slate-50/70">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('login');
+                  setError(null);
+                }}
+                className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all ${
+                  mode === 'login'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('signup');
+                  setError(null);
+                }}
+                className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all ${
+                  mode === 'signup'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                Create Account
+              </button>
+            </div>
+          )}
 
           <div className="p-6 space-y-4">
-            {/* Value Callout */}
-            <div className="p-3 bg-brand-50/60 border border-brand-100 rounded-2xl flex items-start gap-2.5 text-xs text-brand-800">
-              <Sparkles className="w-4 h-4 text-brand-600 flex-shrink-0 mt-0.5" />
-              <p>
-                <strong>Pro Access:</strong> Sign in with any email (Gmail or university .edu) to redeem your team/campus code and keep Pro permanently active.
-              </p>
-            </div>
-
             {/* Error & Success Feedback */}
             {error && (
               <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-2 text-xs text-rose-700 animate-fadeIn">
@@ -175,122 +268,242 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
               </div>
             )}
 
-            {/* Google Quick Button */}
-            <button
-              type="button"
-              onClick={handleGoogleSimulator}
-              className="w-full py-2.5 px-4 border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 rounded-2xl flex items-center justify-center gap-2.5 text-xs font-semibold text-slate-700 transition-colors shadow-xs"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
-                <path
-                  fill="#4285F4"
-                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                />
-              </svg>
-              <span>Continue with Google / Gmail</span>
-            </button>
+            {/* SCREEN 1: Google OAuth Client ID Setup Panel */}
+            {showGoogleSetup ? (
+              <div className="space-y-4 animate-fadeIn">
+                <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-2xl text-xs text-amber-900 space-y-2">
+                  <div className="flex items-center gap-2 font-semibold">
+                    <Key className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                    <span>Google OAuth Client ID Required</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-amber-800">
+                    To open Google's authentic account chooser box ("Choose an account to continue to ResumeFit"), a Google Cloud Client ID is needed.
+                  </p>
+                </div>
 
-            <div className="relative flex items-center justify-center">
-              <div className="border-t border-slate-200 w-full" />
-              <span className="bg-white px-3 text-[11px] text-slate-400 uppercase tracking-wider">
-                Or with email
-              </span>
-            </div>
-
-            {/* Email Form */}
-            <form onSubmit={handleSubmit} className="space-y-3.5">
-              {mode === 'signup' && (
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Full Name
-                  </label>
-                  <div className="relative">
-                    <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                <form onSubmit={handleSaveGoogleClientIdAndContinue} className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Paste Your Google Client ID
+                    </label>
                     <input
                       type="text"
                       required
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="e.g. Alex Rivera"
-                      className="w-full pl-10 pr-4 py-2.5 rounded-2xl border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all"
+                      value={googleClientIdInput}
+                      onChange={(e) => setGoogleClientIdInput(e.target.value)}
+                      placeholder="e.g. 123456789-xyz.apps.googleusercontent.com"
+                      className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all font-mono"
                     />
                   </div>
-                </div>
-              )}
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Email Address
-                </label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-                  <input
-                    ref={emailInputRef}
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="student@university.edu or @gmail.com"
-                    className="w-full pl-10 pr-4 py-2.5 rounded-2xl border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all"
-                  />
-                </div>
-              </div>
+                  <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-2xl text-[11px] text-slate-600 space-y-1.5">
+                    <p className="font-semibold text-slate-700">How to get a Client ID (Free):</p>
+                    <ol className="list-decimal pl-4 space-y-1 text-slate-600">
+                      <li>
+                        Open{' '}
+                        <a
+                          href="https://console.cloud.google.com/apis/credentials"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-brand-600 underline font-medium inline-flex items-center gap-0.5"
+                        >
+                          Google Cloud Console Credentials <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </li>
+                      <li>Create Credentials &gt; OAuth client ID &gt; <strong>Web application</strong>.</li>
+                      <li>
+                        Add Authorized JavaScript origin: <code className="bg-slate-200/70 px-1 py-0.5 rounded text-[10px]">http://localhost:5173</code>
+                      </li>
+                      <li>Paste the Client ID above or in <code className="bg-slate-200/70 px-1 py-0.5 rounded text-[10px]">frontend/.env</code> as <code className="bg-slate-200/70 px-1 py-0.5 rounded text-[10px]">VITE_GOOGLE_CLIENT_ID</code>.</li>
+                    </ol>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Password
-                </label>
-                <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="At least 6 characters"
-                    className="w-full pl-10 pr-10 py-2.5 rounded-2xl border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all"
-                  />
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowGoogleSetup(false)}
+                      className="flex-1 py-2.5 px-3 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-2xl transition-colors flex items-center justify-center gap-1.5"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>Back</span>
+                    </button>
+
+                    <button
+                      type="submit"
+                      className="flex-1 py-2.5 px-3 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-2xl transition-colors flex items-center justify-center gap-1.5 shadow-soft"
+                    >
+                      <span>Save & Open Google</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </form>
+
+                <div className="pt-2 border-t border-slate-100 text-center">
+                  <p className="text-[11px] text-slate-400 mb-2">Developing or testing without Google Cloud?</p>
                   <button
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3.5 top-2.5 text-xs text-slate-400 hover:text-slate-600"
+                    onClick={handleUseDemoAccount}
+                    className="text-xs text-brand-600 hover:text-brand-700 font-medium underline inline-flex items-center gap-1"
                   >
-                    {showPassword ? 'Hide' : 'Show'}
+                    Use Demo Student Account (student.demo@gmail.com)
                   </button>
                 </div>
               </div>
+            ) : (
+              /* SCREEN 2: Standard Auth Modal with Real Google Button */
+              <>
+                {/* Value Callout */}
+                <div className="p-3 bg-brand-50/60 border border-brand-100 rounded-2xl flex items-start gap-2.5 text-xs text-brand-800">
+                  <Sparkles className="w-4 h-4 text-brand-600 flex-shrink-0 mt-0.5" />
+                  <p>
+                    <strong>Pro Access:</strong> Sign in with any email (Gmail or university .edu) to redeem your team/campus code and keep Pro permanently active.
+                  </p>
+                </div>
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full mt-2 py-3 px-4 rounded-2xl bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs shadow-soft hover:shadow-hover flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>{mode === 'signup' ? 'Creating Account...' : 'Signing In...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <span>{mode === 'signup' ? 'Create Account & Continue' : 'Sign In'}</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
-            </form>
+                {/* Google Sign In Button */}
+                <div className="space-y-1.5">
+                  <button
+                    type="button"
+                    onClick={handleGoogleClick}
+                    disabled={googleLoading || loading}
+                    className="w-full py-2.5 px-4 border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 rounded-2xl flex items-center justify-center gap-2.5 text-xs font-semibold text-slate-700 transition-colors shadow-xs disabled:opacity-50"
+                  >
+                    {googleLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-brand-600" />
+                        <span>Opening Google Account Chooser...</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4" viewBox="0 0 24 24">
+                          <path
+                            fill="#4285F4"
+                            d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                          />
+                          <path
+                            fill="#34A853"
+                            d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                          />
+                          <path
+                            fill="#FBBC05"
+                            d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                          />
+                          <path
+                            fill="#EA4335"
+                            d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                          />
+                        </svg>
+                        <span>Continue with Google / Gmail</span>
+                      </>
+                    )}
+                  </button>
+
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[10px] text-slate-400">
+                      {getGoogleClientId() ? 'Google OAuth linked' : 'OAuth Client ID not yet set'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowGoogleSetup(true)}
+                      className="text-[10px] text-brand-600 hover:text-brand-700 flex items-center gap-1 font-medium"
+                    >
+                      <Settings2 className="w-3 h-3" />
+                      <span>{getGoogleClientId() ? 'Edit Client ID' : 'Setup Google OAuth'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="relative flex items-center justify-center">
+                  <div className="border-t border-slate-200 w-full" />
+                  <span className="bg-white px-3 text-[11px] text-slate-400 uppercase tracking-wider">
+                    Or with email
+                  </span>
+                </div>
+
+                {/* Email Form */}
+                <form onSubmit={handleSubmit} className="space-y-3.5">
+                  {mode === 'signup' && (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Full Name
+                      </label>
+                      <div className="relative">
+                        <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                        <input
+                          type="text"
+                          required
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          placeholder="e.g. Alex Rivera"
+                          className="w-full pl-10 pr-4 py-2.5 rounded-2xl border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Email Address
+                    </label>
+                    <div className="relative">
+                      <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                      <input
+                        ref={emailInputRef}
+                        type="email"
+                        required
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="student@university.edu or @gmail.com"
+                        className="w-full pl-10 pr-4 py-2.5 rounded-2xl border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Password
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        minLength={6}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="At least 6 characters"
+                        className="w-full pl-10 pr-10 py-2.5 rounded-2xl border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3.5 top-2.5 text-xs text-slate-400 hover:text-slate-600"
+                      >
+                        {showPassword ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading || googleLoading}
+                    className="w-full mt-2 py-3 px-4 rounded-2xl bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs shadow-soft hover:shadow-hover flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>{mode === 'signup' ? 'Creating Account...' : 'Signing In...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>{mode === 'signup' ? 'Create Account & Continue' : 'Sign In'}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </form>
+              </>
+            )}
           </div>
         </div>
       </div>

@@ -3,6 +3,7 @@ import {
   getMyProfile,
   loginUser,
   signupUser,
+  loginWithGoogle,
   removeStoredToken,
   redeemCode
 } from '../services/auth';
@@ -50,6 +51,12 @@ export function AuthProvider({ children }) {
     return res;
   };
 
+  const loginGoogle = async (googleCredentials) => {
+    const res = await loginWithGoogle(googleCredentials);
+    setUser(res.user);
+    return res;
+  };
+
   const logout = () => {
     removeStoredToken();
     setUser(null);
@@ -73,6 +80,7 @@ export function AuthProvider({ children }) {
         isLoggedIn: Boolean(user),
         isPro,
         login,
+        loginGoogle,
         signup,
         logout,
         redeem,

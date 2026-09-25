@@ -1,9 +1,11 @@
 import re
+import secrets
 from typing import Optional
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from pydantic import BaseModel, EmailStr, Field
 
-from config import VALID_PROMO_CODES
+from config import VALID_PROMO_CODES, GOOGLE_CLIENT_ID
 from database import (
     create_user,
     get_user_by_email,
@@ -28,6 +30,10 @@ class LoginRequest(BaseModel):
 
 class RedeemRequest(BaseModel):
     code: str = Field(..., min_length=1, max_length=50)
+
+class GoogleAuthRequest(BaseModel):
+    credential: Optional[str] = None
+    access_token: Optional[str] = None
 
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -114,6 +120,96 @@ async def login(req: LoginRequest):
     token = create_access_token(user_record["id"], user_record["email"])
     return {
         "message": "Signed in successfully.",
+        "token": token,
+        "user": user_record
+    }
+
+
+async def fetch_google_user_info(credential: Optional[str], access_token: Optional[str]) -> dict:
+    """Verifies Google ID token or queries Google userinfo endpoint with OAuth2 access token."""
+    async with httpx.AsyncClient(timeout=10.0) as http_client:
+        if access_token:
+            resp = await http_client.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            if resp.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid or expired Google access token."
+                )
+            data = resp.json()
+            email = data.get("email")
+            if not email:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No email found in Google profile."
+                )
+            name = data.get("name") or data.get("given_name") or email.split("@")[0]
+            picture = data.get("picture")
+            return {"email": email, "name": name, "picture": picture}
+
+        elif credential:
+            resp = await http_client.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"id_token": credential}
+            )
+            if resp.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid Google credential token."
+                )
+            data = resp.json()
+            if GOOGLE_CLIENT_ID and data.get("aud") != GOOGLE_CLIENT_ID:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Google token audience mismatch."
+                )
+            email = data.get("email")
+            if not email:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No email found in Google credential."
+                )
+            name = data.get("name") or data.get("given_name") or email.split("@")[0]
+            picture = data.get("picture")
+            return {"email": email, "name": name, "picture": picture}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Either 'access_token' or 'credential' must be provided."
+            )
+
+
+@router.post("/google")
+async def google_auth(req: GoogleAuthRequest):
+    """Authenticates or signs up a user using verified Google credentials."""
+    if not req.credential and not req.access_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing Google authentication token."
+        )
+
+    g_user = await fetch_google_user_info(req.credential, req.access_token)
+    clean_email = g_user["email"].strip().lower()
+    user_name = g_user.get("name") or clean_email.split("@")[0]
+
+    user_record = get_user_by_email(clean_email)
+    if not user_record:
+        # Auto-provision user account with random secure password
+        random_pw = secrets.token_urlsafe(32)
+        pw_hash = hash_password(random_pw)
+        user_record = create_user(
+            name=user_name,
+            email=clean_email,
+            password_hash=pw_hash
+        )
+    else:
+        user_record.pop("password_hash", None)
+
+    token = create_access_token(user_record["id"], user_record["email"])
+    return {
+        "message": "Signed in with Google successfully.",
         "token": token,
         "user": user_record
     }
