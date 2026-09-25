@@ -70,6 +70,16 @@ export function AuthProvider({ children }) {
     return res;
   };
 
+  const refreshProfile = async () => {
+    try {
+      const profile = await getMyProfile();
+      setUser(profile);
+      return profile;
+    } catch {
+      return null;
+    }
+  };
+
   const isPro = Boolean(user?.is_pro);
 
   return (
@@ -84,7 +94,8 @@ export function AuthProvider({ children }) {
         signup,
         logout,
         redeem,
-        setUser
+        setUser,
+        refreshProfile
       }}
     >
       {children}

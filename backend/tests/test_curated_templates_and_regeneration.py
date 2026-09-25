@@ -13,7 +13,14 @@ from docx import Document
 from fastapi.testclient import TestClient
 
 from main import app, pipeline
-from database import init_db, save_scan_result, get_scan_result
+from database import (
+    init_db,
+    save_scan_result,
+    get_scan_result,
+    create_user,
+    upgrade_user_to_pro,
+    create_access_token
+)
 from services.resume_builder import (
     build_docx_resume,
     build_pdf_resume,
@@ -256,9 +263,16 @@ async def test_regenerate_recommendations_endpoint(monkeypatch):
     monkeypatch.setattr(pipeline.parser_agent, "run", mock_parser)
     monkeypatch.setattr(pipeline.jd_agent, "run", mock_jd)
 
+    # Create a Pro user for authorization
+    pro_user = create_user("Taylor Swift", "taylor@swift.edu", "password123", db_path=test_db_path)
+    upgrade_user_to_pro(pro_user["id"], "CAMPUS2026", db_path=test_db_path)
+    pro_token = create_access_token(pro_user["id"], pro_user["email"])
+    headers = {"Authorization": f"Bearer {pro_token}"}
+
     # Call endpoint
     response = client.post(
         "/api/resume/regenerate-recommendations",
+        headers=headers,
         json={"scan_id": scan_id},
     )
 
@@ -281,12 +295,26 @@ async def test_regenerate_recommendations_endpoint(monkeypatch):
     temp_dir.cleanup()
 
 
-def test_regenerate_recommendations_not_found():
+def test_regenerate_recommendations_not_found(monkeypatch):
     """Tests 404 response when scan_id does not exist."""
+    temp_dir = tempfile.TemporaryDirectory()
+    test_db_path = str(temp_dir.name + "/test_notfound.db")
+    monkeypatch.setattr("config.DATABASE_URL", None)
+    monkeypatch.setattr("database.DATABASE_URL", None)
+    monkeypatch.setattr("config.DATABASE_PATH", test_db_path)
+    monkeypatch.setattr("database.DATABASE_PATH", test_db_path)
+    init_db(test_db_path)
+
+    pro_user = create_user("Pro Tester", "protest@resumefit.ai", "pw", db_path=test_db_path)
+    upgrade_user_to_pro(pro_user["id"], "CAMPUS2026", db_path=test_db_path)
+    pro_token = create_access_token(pro_user["id"], pro_user["email"])
+
     response = client.post(
         "/api/resume/regenerate-recommendations",
+        headers={"Authorization": f"Bearer {pro_token}"},
         json={"scan_id": "non-existent-scan-id-xyz"},
     )
     assert response.status_code == 404
     data = response.json()
     assert "not found" in data["detail"].lower()
+    temp_dir.cleanup()

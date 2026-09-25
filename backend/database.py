@@ -68,8 +68,12 @@ def init_db(db_path: Optional[str] = None, db_url: Optional[str] = None) -> None
                         is_pro INTEGER NOT NULL DEFAULT 0,
                         pro_code_used TEXT DEFAULT NULL,
                         pro_redeemed_at TEXT DEFAULT NULL,
+                        scans_today INTEGER NOT NULL DEFAULT 0,
+                        last_scan_date TEXT DEFAULT NULL,
                         created_at TEXT NOT NULL
                     );
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS scans_today INTEGER NOT NULL DEFAULT 0;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_scan_date TEXT DEFAULT NULL;
                     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
                     ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 
@@ -107,9 +111,18 @@ def init_db(db_path: Optional[str] = None, db_url: Optional[str] = None) -> None
                         is_pro INTEGER NOT NULL DEFAULT 0,
                         pro_code_used TEXT DEFAULT NULL,
                         pro_redeemed_at TEXT DEFAULT NULL,
+                        scans_today INTEGER NOT NULL DEFAULT 0,
+                        last_scan_date TEXT DEFAULT NULL,
                         created_at TEXT NOT NULL
                     );
                 """)
+                # Handle SQLite migration for existing tables
+                user_cols = [c[1] for c in conn.execute("PRAGMA table_info(users);").fetchall()]
+                if "scans_today" not in user_cols:
+                    conn.execute("ALTER TABLE users ADD COLUMN scans_today INTEGER NOT NULL DEFAULT 0;")
+                if "last_scan_date" not in user_cols:
+                    conn.execute("ALTER TABLE users ADD COLUMN last_scan_date TEXT DEFAULT NULL;")
+
                 conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
                 """)
@@ -186,6 +199,12 @@ def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
 
 # User Database Queries
 def format_user_dict(row: Any) -> Dict[str, Any]:
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    keys = row.keys() if hasattr(row, "keys") else []
+    raw_scans = row["scans_today"] if "scans_today" in keys else 0
+    last_scan = row["last_scan_date"] if "last_scan_date" in keys else None
+    scans_today = raw_scans if last_scan == today_utc else 0
+
     return {
         "id": row["id"],
         "name": row["name"],
@@ -193,6 +212,8 @@ def format_user_dict(row: Any) -> Dict[str, Any]:
         "is_pro": bool(row["is_pro"]),
         "pro_code_used": row["pro_code_used"],
         "pro_redeemed_at": row["pro_redeemed_at"],
+        "scans_today": scans_today,
+        "last_scan_date": last_scan,
         "created_at": str(row["created_at"])
     }
 
@@ -323,6 +344,75 @@ def upgrade_user_to_pro(user_id: int, promo_code: str, db_path: Optional[str] = 
                 if not row:
                     return None
                 return format_user_dict(row)
+        finally:
+            conn.close()
+
+def check_and_increment_scan_count(
+    user_id: int,
+    is_pro: bool,
+    db_path: Optional[str] = None,
+    db_url: Optional[str] = None
+) -> bool:
+    """
+    Checks if a user can scan today under their daily scan cap:
+      - 2 scans/day for free users
+      - 7 scans/day for Pro users
+    Resets scans_today to 0 when last_scan_date isn't today (UTC).
+    Returns False without incrementing if the user is already at their cap (2 for free, 7 for Pro).
+    Otherwise increments scans_today and updates last_scan_date, returning True.
+    """
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cap = 7 if is_pro else 2
+
+    if is_using_postgres(db_url):
+        conn = get_postgres_connection(db_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT scans_today, last_scan_date FROM users WHERE id = %s FOR UPDATE;",
+                    (user_id,)
+                )
+                row = cur.fetchone()
+                if not row:
+                    return False
+                last_scan = row.get("last_scan_date")
+                raw_scans = row.get("scans_today") or 0
+
+                scans_today = 0 if last_scan != today_utc else raw_scans
+                if scans_today >= cap:
+                    return False
+
+                new_scans = scans_today + 1
+                cur.execute(
+                    "UPDATE users SET scans_today = %s, last_scan_date = %s WHERE id = %s;",
+                    (new_scans, today_utc, user_id)
+                )
+                return True
+        finally:
+            conn.close()
+    else:
+        conn = get_sqlite_connection(db_path)
+        try:
+            with conn:
+                row = conn.execute(
+                    "SELECT scans_today, last_scan_date FROM users WHERE id = ?",
+                    (user_id,)
+                ).fetchone()
+                if not row:
+                    return False
+                last_scan = row["last_scan_date"]
+                raw_scans = row["scans_today"] or 0
+
+                scans_today = 0 if last_scan != today_utc else raw_scans
+                if scans_today >= cap:
+                    return False
+
+                new_scans = scans_today + 1
+                conn.execute(
+                    "UPDATE users SET scans_today = ?, last_scan_date = ? WHERE id = ?",
+                    (new_scans, today_utc, user_id)
+                )
+                return True
         finally:
             conn.close()
 

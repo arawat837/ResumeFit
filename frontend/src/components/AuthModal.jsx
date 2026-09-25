@@ -162,17 +162,6 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
     launchGooglePicker(cleanId);
   };
 
-  const handleUseDemoAccount = () => {
-    setShowGoogleSetup(false);
-    setEmail('student.demo@gmail.com');
-    if (mode === 'signup' && !name) {
-      setName('University Student');
-    }
-    setPassword('demo123456');
-    setError(null);
-    setSuccessMsg('Filled demo student credentials. Click the button below to continue.');
-  };
-
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true">
       {/* Backdrop */}
@@ -337,17 +326,6 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
                     </button>
                   </div>
                 </form>
-
-                <div className="pt-2 border-t border-slate-100 text-center">
-                  <p className="text-[11px] text-slate-400 mb-2">Developing or testing without Google Cloud?</p>
-                  <button
-                    type="button"
-                    onClick={handleUseDemoAccount}
-                    className="text-xs text-brand-600 hover:text-brand-700 font-medium underline inline-flex items-center gap-1"
-                  >
-                    Use Demo Student Account (student.demo@gmail.com)
-                  </button>
-                </div>
               </div>
             ) : (
               /* SCREEN 2: Standard Auth Modal with Real Google Button */

@@ -1,7 +1,7 @@
 import logging
 import uuid
 from typing import Optional
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, status
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -18,8 +18,14 @@ from pydantic import BaseModel
 from presets.roles import ROLE_PRESETS
 from parsers import PDFParser, DOCXParser
 from agents.pipeline import AgentPipeline
-from database import init_db, save_scan_file, save_scan_result, get_scan_result
-from routers.auth import router as auth_router
+from database import (
+    init_db,
+    save_scan_file,
+    save_scan_result,
+    get_scan_result,
+    check_and_increment_scan_count
+)
+from routers.auth import router as auth_router, get_current_user
 from routers.export_router import router as export_router
 
 logging.basicConfig(level=logging.INFO)
@@ -95,15 +101,30 @@ async def scan_resume(
     mode: str = Form("general"),  # 'general', 'preset', or 'custom'
     role_id: Optional[str] = Form(None),
     custom_jd: Optional[str] = Form(None),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     Unified resume scanning endpoint:
-    1. Validates file size (max 5MB) -> HTTP 413 if exceeded
-    2. Validates format (.pdf or .docx)
-    3. Parses text & inspects formatting (HTTP 422 if scanned PDF or unreadable)
-    4. Runs agentic pipeline (Parser + JD -> Scoring -> Recommendations)
-    5. Returns ATS score, breakdown, engine attribution, and actionable fixes
+    1. Validates authentication and enforces daily scan caps (2/day free, 7/day Pro)
+    2. Validates file size (max 5MB) -> HTTP 413 if exceeded
+    3. Validates format (.pdf or .docx)
+    4. Parses text & inspects formatting (HTTP 422 if scanned PDF or unreadable)
+    5. Runs agentic pipeline (Parser + JD -> Scoring -> Recommendations)
+    6. Returns ATS score, breakdown, engine attribution, and actionable fixes
     """
+    user_id = current_user["id"]
+    is_pro = bool(current_user.get("is_pro", False))
+
+    if not check_and_increment_scan_count(user_id=user_id, is_pro=is_pro):
+        cap = 7 if is_pro else 2
+        user_tier = "Pro" if is_pro else "free"
+        logger.warning(f"User {user_id} ({current_user.get('email')}) exceeded daily scan cap ({cap}/day).")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Daily scan limit reached ({cap} scans per day for {user_tier} accounts). "
+                   f"{'Upgrade to Pro for 7 daily scans and AI regeneration.' if not is_pro else 'Your scan cap resets at 00:00 UTC.'}"
+        )
+
     # 1. Read file bytes and enforce 5MB size limit
     file_bytes = await file.read()
     file_size = len(file_bytes)
@@ -181,12 +202,22 @@ class RegenerateRecommendationsRequest(BaseModel):
 
 
 @app.post("/api/resume/regenerate-recommendations")
-async def regenerate_recommendations(payload: RegenerateRecommendationsRequest):
+async def regenerate_recommendations(
+    payload: RegenerateRecommendationsRequest,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Regenerates recommendation fixes for an already-scanned resume.
+    Exclusive to Pro users.
     Uses cached parsed_resume, parsed_jd, and scoring_result.
     Executes ONLY recommendation_agent.run() (zero re-parsing, zero JD calls, saving Gemini quota).
     """
+    if not current_user.get("is_pro"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Recommendation regeneration is exclusive to ResumeFit Pro users. Please upgrade your account to access AI regeneration."
+        )
+
     scan_id = payload.scan_id
     cached = get_scan_result(scan_id)
     if not cached:

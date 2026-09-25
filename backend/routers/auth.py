@@ -150,29 +150,27 @@ async def fetch_google_user_info(credential: Optional[str], access_token: Option
             return {"email": email, "name": name, "picture": picture}
 
         elif credential:
-            resp = await http_client.get(
-                "https://oauth2.googleapis.com/tokeninfo",
-                params={"id_token": credential}
-            )
-            if resp.status_code != 200:
+            try:
+                from google.oauth2 import id_token
+                from google.auth.transport import requests as google_requests
+
+                request = google_requests.Request()
+                audience = GOOGLE_CLIENT_ID.strip() if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_ID.strip() else None
+                id_info = id_token.verify_oauth2_token(credential, request, audience=audience)
+            except Exception:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid Google credential token."
                 )
-            data = resp.json()
-            if GOOGLE_CLIENT_ID and data.get("aud") != GOOGLE_CLIENT_ID:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Google token audience mismatch."
-                )
-            email = data.get("email")
+
+            email = id_info.get("email")
             if not email:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="No email found in Google credential."
                 )
-            name = data.get("name") or data.get("given_name") or email.split("@")[0]
-            picture = data.get("picture")
+            name = id_info.get("name") or id_info.get("given_name") or email.split("@")[0]
+            picture = id_info.get("picture")
             return {"email": email, "name": name, "picture": picture}
         else:
             raise HTTPException(

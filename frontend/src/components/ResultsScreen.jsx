@@ -14,7 +14,7 @@ export default function ResultsScreen({
   onReset,
   onOpenUpgrade
 }) {
-  const { isPro } = useAuth();
+  const { user, isPro } = useAuth();
   const [isOptimizerModalOpen, setIsOptimizerModalOpen] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState(null);
@@ -77,13 +77,36 @@ export default function ResultsScreen({
     <div className="w-full max-w-4xl mx-auto space-y-8 animate-fadeIn">
       {/* Top Bar: Back Action & Engine Attribution Badge */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200">
-        <button
-          onClick={onReset}
-          className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600 hover:text-brand-600 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>Scan another resume</span>
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onReset}
+            className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600 hover:text-brand-600 transition-colors cursor-pointer"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Scan another resume</span>
+          </button>
+
+          {user && (
+            <span
+              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                (user.scans_today || 0) >= (isPro ? 7 : 2)
+                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                  : 'bg-slate-100 text-slate-600 border border-slate-200'
+              }`}
+            >
+              <span>{`${user.scans_today || 0} of ${isPro ? 7 : 2} scans used today`}</span>
+              {!isPro && (user.scans_today || 0) >= 2 && (
+                <button
+                  type="button"
+                  onClick={onOpenUpgrade}
+                  className="text-brand-600 font-semibold underline hover:text-brand-700 cursor-pointer ml-1"
+                >
+                  Upgrade to Pro
+                </button>
+              )}
+            </span>
+          )}
+        </div>
 
         {/* Engine Attribution Badge */}
         <div className="flex items-center gap-2">

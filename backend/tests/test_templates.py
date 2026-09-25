@@ -107,6 +107,7 @@ def test_export_original_template_in_place_docx(setup_test_db):
     # Scan the document first to persist raw bytes
     scan_res = client.post(
         "/api/scan",
+        headers={"Authorization": f"Bearer {token}"},
         files={"file": ("alex_mercer.docx", orig_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
         data={"mode": "general"}
     )

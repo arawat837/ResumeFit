@@ -106,6 +106,7 @@ def test_run_level_preservation_and_exact_xml_diff(setup_test_db):
     # 1. Scan resume and ensure raw bytes are persisted with a scan_id
     scan_res = client.post(
         "/api/scan",
+        headers={"Authorization": f"Bearer {token}"},
         files={"file": ("alex_mercer.docx", orig_docx_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
         data={"mode": "general"}
     )
@@ -213,6 +214,7 @@ def test_pdf_export_for_original_and_custom_templates_returns_clean_error_or_pdf
 
     scan_res = client.post(
         "/api/scan",
+        headers={"Authorization": f"Bearer {token}"},
         files={"file": ("alex_mercer.docx", orig_docx_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
         data={"mode": "general"}
     )

@@ -1,3 +1,5 @@
+import { getStoredToken } from './auth';
+
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export async function fetchPresets() {
@@ -30,6 +32,12 @@ export async function scanResume({ file, mode, roleId, customJd }) {
     formData.append('custom_jd', customJd);
   }
 
+  const token = getStoredToken();
+  const headers = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   // Set safe 75-second timeout to accommodate Render free-tier cold starts
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 75000);
@@ -37,6 +45,7 @@ export async function scanResume({ file, mode, roleId, customJd }) {
   try {
     const res = await fetch(`${API_BASE_URL}/api/scan`, {
       method: 'POST',
+      headers,
       body: formData,
       signal: controller.signal
     });
@@ -67,9 +76,15 @@ export async function scanResume({ file, mode, roleId, customJd }) {
 }
 
 export async function regenerateRecommendations(scanId) {
+  const token = getStoredToken();
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_BASE_URL}/api/resume/regenerate-recommendations`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ scan_id: scanId })
   });
 

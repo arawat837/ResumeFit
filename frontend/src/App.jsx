@@ -8,10 +8,12 @@ import ResultsScreen from './components/ResultsScreen';
 import UpgradeModal from './components/UpgradeModal';
 import HistoryDrawer from './components/HistoryDrawer';
 import AuthModal from './components/AuthModal';
+import { useAuth } from './context/AuthContext';
 import { fetchPresets, scanResume } from './services/api';
 import { getScanHistory, saveScanResult, clearScanHistory } from './services/history';
 
 export default function App() {
+  const { user, isLoggedIn, isPro, refreshProfile } = useAuth();
   const [selectedFile, setSelectedFile] = useState(null);
   const [mode, setMode] = useState('general');
   const [selectedRoleId, setSelectedRoleId] = useState('data_analyst');
@@ -25,6 +27,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState(null);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [pendingScan, setPendingScan] = useState(false);
 
   // Session-based scan history state
   const [history, setHistory] = useState([]);
@@ -53,8 +56,12 @@ export default function App() {
     setErrorMessage(null);
   };
 
-  const handleStartScan = async () => {
-    if (!selectedFile) return;
+  const dailyCap = isPro ? 7 : 2;
+  const scansUsed = user?.scans_today || 0;
+  const isAtCap = isLoggedIn && scansUsed >= dailyCap;
+
+  const executeScan = async (fileToScan = selectedFile) => {
+    if (!fileToScan) return;
 
     setStatus('processing');
     setIsApiComplete(false);
@@ -62,7 +69,7 @@ export default function App() {
 
     try {
       const result = await scanResume({
-        file: selectedFile,
+        file: fileToScan,
         mode,
         roleId: selectedRoleId,
         customJd,
@@ -72,9 +79,12 @@ export default function App() {
       // Mark API complete so the ProcessingScreen can wrap up its animated steps
       setIsApiComplete(true);
 
+      // Refresh auth profile so scans_today is up to date immediately
+      await refreshProfile();
+
       // Save to browser sessionStorage under resumefit_scan_history (max 10 items)
       const updatedHistory = saveScanResult({
-        filename: selectedFile.name,
+        filename: fileToScan.name,
         mode,
         roleId: selectedRoleId,
         result,
@@ -85,7 +95,30 @@ export default function App() {
       setErrorMessage(err.message || 'Failed to scan resume. Please try again.');
       setStatus('idle');
       setIsApiComplete(false);
+      await refreshProfile();
     }
+  };
+
+  const handleStartScan = () => {
+    if (!selectedFile) return;
+
+    if (!isLoggedIn) {
+      setPendingScan(true);
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    if (isAtCap) {
+      if (!isPro) {
+        setErrorMessage(`Daily limit reached (${scansUsed} of ${dailyCap} scans used today). Upgrade to Pro for 7 daily scans and AI regeneration!`);
+        setIsUpgradeModalOpen(true);
+      } else {
+        setErrorMessage(`Daily limit reached (${scansUsed} of ${dailyCap} scans used today). Your Pro scan cap resets at 00:00 UTC.`);
+      }
+      return;
+    }
+
+    executeScan(selectedFile);
   };
 
   const handleProcessingAnimationFinished = () => {
@@ -169,24 +202,83 @@ export default function App() {
 
             {/* Scan Action Button */}
             <div className="pt-2 text-center">
+              {/* Daily Scan Usage Status Indicator */}
+              <div className="flex items-center justify-center gap-2 mb-3">
+                {isLoggedIn ? (
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
+                      isAtCap
+                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                        : 'bg-brand-50 text-brand-800 border border-brand-200'
+                    }`}
+                  >
+                    <span>{`${scansUsed} of ${dailyCap} scans used today`}</span>
+                    {!isPro && (
+                      <span className="text-slate-400 font-normal">
+                        •{' '}
+                        <button
+                          type="button"
+                          onClick={() => setIsUpgradeModalOpen(true)}
+                          className="text-brand-600 font-semibold underline hover:text-brand-700 cursor-pointer"
+                        >
+                          Get 7/day with Pro
+                        </button>
+                      </span>
+                    )}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200">
+                    <span>Sign in required to scan (2 free scans/day • 7 for Pro)</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsAuthModalOpen(true)}
+                      className="text-brand-600 font-semibold underline hover:text-brand-700 cursor-pointer ml-1"
+                    >
+                      Sign In
+                    </button>
+                  </span>
+                )}
+              </div>
+
               <button
                 type="button"
                 onClick={handleStartScan}
-                disabled={!selectedFile}
+                disabled={!selectedFile || isAtCap}
                 className={`inline-flex items-center justify-center gap-2.5 px-8 py-4 rounded-2xl text-sm font-bold shadow-soft transition-all transform ${
-                  selectedFile
-                    ? 'bg-brand-600 hover:bg-brand-700 text-white cursor-pointer hover:scale-[1.02] shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  !selectedFile
+                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                    : isAtCap
+                    ? 'bg-rose-100 text-rose-500 cursor-not-allowed border border-rose-200'
+                    : 'bg-brand-600 hover:bg-brand-700 text-white cursor-pointer hover:scale-[1.02] shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2'
                 }`}
               >
-                <span>Calculate ATS Compatibility Score</span>
+                <span>
+                  {isAtCap
+                    ? 'Daily Scan Limit Reached'
+                    : !isLoggedIn
+                    ? 'Sign In to Scan Resume'
+                    : 'Calculate ATS Compatibility Score'}
+                </span>
                 <ArrowRight className="w-4 h-4" />
               </button>
+
+              {isAtCap && !isPro && (
+                <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-2xl max-w-md mx-auto text-xs text-rose-800 flex items-center justify-between gap-3 animate-fadeIn">
+                  <span>You've used all 2 of your free scans today.</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsUpgradeModalOpen(true)}
+                    className="px-3 py-1 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-xl text-xs flex-shrink-0 cursor-pointer"
+                  >
+                    Upgrade to Pro
+                  </button>
+                </div>
+              )}
 
               <div className="flex items-center justify-center gap-4 text-[11px] text-slate-400 mt-4">
                 <span className="flex items-center gap-1">
                   <ShieldCheck className="w-3.5 h-3.5 text-slate-400" />
-                  In-memory processing (no accounts or storage)
+                  Daily limits: 2 scans/day free • 7 scans/day Pro (resets 00:00 UTC)
                 </span>
                 <span>•</span>
                 <span>PDF & DOCX supported</span>
@@ -238,8 +330,19 @@ export default function App() {
       {/* User Authentication Modal */}
       <AuthModal
         isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        onAuthSuccess={() => setIsUpgradeModalOpen(true)}
+        onClose={() => {
+          setIsAuthModalOpen(false);
+          setPendingScan(false);
+        }}
+        onAuthSuccess={() => {
+          setIsAuthModalOpen(false);
+          if (pendingScan && selectedFile) {
+            setPendingScan(false);
+            executeScan(selectedFile);
+          } else {
+            setIsUpgradeModalOpen(true);
+          }
+        }}
       />
 
       {/* Simple Footer */}
