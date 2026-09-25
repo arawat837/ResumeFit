@@ -71,9 +71,9 @@ SAMPLE_PAYLOAD = {
     ]
 }
 
-def test_export_all_templates_docx_including_original(setup_test_db):
+def test_export_curated_templates_docx(setup_test_db):
     token = setup_test_db["token"]
-    for template_id in ["original", "ivy_league", "tech_minimalist", "modern_corporate"]:
+    for template_id in ["ivy_league", "tech_minimalist", "modern_corporate"]:
         payload = {**SAMPLE_PAYLOAD, "format": "docx", "template_id": template_id}
         res = client.post("/api/resume/export", json=payload, headers={"Authorization": f"Bearer {token}"})
         assert res.status_code == 200
@@ -81,15 +81,51 @@ def test_export_all_templates_docx_including_original(setup_test_db):
         assert f"Alex_Mercer_{template_id}_Optimized.docx" in res.headers["content-disposition"]
         assert len(res.content) > 1000
 
-def test_export_all_templates_pdf_including_original(setup_test_db):
+def test_export_curated_templates_pdf(setup_test_db):
     token = setup_test_db["token"]
-    for template_id in ["original", "ivy_league", "tech_minimalist", "modern_corporate"]:
+    for template_id in ["ivy_league", "tech_minimalist", "modern_corporate"]:
         payload = {**SAMPLE_PAYLOAD, "format": "pdf", "template_id": template_id}
         res = client.post("/api/resume/export", json=payload, headers={"Authorization": f"Bearer {token}"})
         assert res.status_code == 200
         assert res.headers["content-type"] == "application/pdf"
         assert f"Alex_Mercer_{template_id}_Optimized.pdf" in res.headers["content-disposition"]
         assert len(res.content) > 1000
+
+def test_export_original_template_in_place_docx(setup_test_db):
+    token = setup_test_db["token"]
+    import io
+    from docx import Document
+
+    # Create dummy original docx
+    orig_doc = Document()
+    orig_doc.add_heading("Alex Mercer", 0)
+    orig_doc.add_paragraph("Helped team improve search database query times by adding indexes.")
+    buf = io.BytesIO()
+    orig_doc.save(buf)
+    orig_bytes = buf.getvalue()
+
+    # Scan the document first to persist raw bytes
+    scan_res = client.post(
+        "/api/scan",
+        files={"file": ("alex_mercer.docx", orig_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        data={"mode": "general"}
+    )
+    assert scan_res.status_code == 200
+    scan_id = scan_res.json()["scan_id"]
+
+    # Export with template_id == 'original' using scan_id
+    payload = {
+        **SAMPLE_PAYLOAD,
+        "format": "docx",
+        "template_id": "original",
+        "scan_id": scan_id
+    }
+    res = client.post("/api/resume/export", json=payload, headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    assert "OriginalFormat_Optimized.docx" in res.headers["content-disposition"]
+    exported_doc = Document(io.BytesIO(res.content))
+    full_text = "\n".join(p.text for p in exported_doc.paragraphs)
+    assert "Optimized database query performance by 42%" in full_text
 
 def test_export_custom_docx_template(setup_test_db):
     import io, base64

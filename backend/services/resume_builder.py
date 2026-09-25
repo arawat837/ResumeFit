@@ -8,6 +8,12 @@ Supports 3 curated university student template layouts:
 """
 
 import io
+import re
+import shutil
+import subprocess
+import tempfile
+import logging
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
@@ -17,6 +23,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+
+logger = logging.getLogger("resumefit.builder")
 
 
 CURATED_TEMPLATES = {
@@ -108,11 +116,93 @@ def apply_bullet_rewrites(
     return updated_items
 
 
+def replace_in_paragraph_runs(paragraph, orig: str, new_b: str) -> bool:
+    """
+    Substitutes matched original bullet text with new_b strictly at the Run level.
+    Only the characters in overlapping runs are modified.
+    All preceding, subsequent, and un-overlapped runs, run properties (b, i, u, color, size, font),
+    and paragraph properties are preserved byte-for-byte.
+    Handles spans across multiple runs by writing new_b at the first overlapping run
+    and clearing the matched text in subsequent overlapping runs.
+    """
+    if not paragraph.runs:
+        return False
+
+    full_text = "".join(r.text for r in paragraph.runs)
+    if not full_text.strip():
+        return False
+
+    clean_orig = orig.strip()
+    if not clean_orig:
+        return False
+
+    # Attempt 1: Exact substring match (case-insensitive)
+    idx = full_text.lower().find(clean_orig.lower())
+    match_len = len(clean_orig)
+
+    # Attempt 2: If orig starts with bullet glyphs/numbers/whitespace, strip them
+    if idx == -1:
+        stripped_orig = re.sub(
+            r"^[\s\t•\*\-\–\—\·\u2022\u25cf\uf0b7\uf0a7\u25aa\u25e6\u25cb\u2043\u2219\u2713\(\d+\)\.]+\s*",
+            "",
+            clean_orig
+        ).strip()
+        if stripped_orig:
+            idx = full_text.lower().find(stripped_orig.lower())
+            match_len = len(stripped_orig)
+
+    # Attempt 3: Trailing period variations
+    if idx == -1:
+        no_dot = clean_orig.rstrip(".")
+        if no_dot:
+            idx = full_text.lower().find(no_dot.lower())
+            match_len = len(no_dot)
+
+    # Attempt 4: Multi-word prefix match for slightly trimmed parser bullets
+    if idx == -1 and len(clean_orig) > 30:
+        prefix = clean_orig[:30].lower()
+        idx_prefix = full_text.lower().find(prefix)
+        if idx_prefix != -1:
+            idx = idx_prefix
+            # Match up to the end of the paragraph/sentence
+            match_len = len(full_text) - idx_prefix
+
+    if idx == -1:
+        return False
+
+    end = idx + match_len
+    pos = 0
+    first_overlap = True
+
+    for run in paragraph.runs:
+        run_len = len(run.text)
+        run_start = pos
+        run_end = pos + run_len
+
+        if run_start < end and run_end > idx:
+            local_start = max(0, idx - run_start)
+            local_end = min(run_len, end - run_start)
+
+            replacement = new_b if first_overlap else ""
+            run.text = run.text[:local_start] + replacement + run.text[local_end:]
+            first_overlap = False
+
+        pos += run_len
+
+    return True
+
+
 def apply_rewrites_to_custom_docx(
     custom_docx_bytes: bytes,
     applied_rewrites: List[Dict[str, Any]]
 ) -> bytes:
-    """Takes an uploaded custom .docx file and applies Google XYZ bullet rewrites in place."""
+    """
+    Takes an uploaded custom or original .docx file and applies Google XYZ bullet rewrites
+    in place at the Run level, preserving 100% of formatting, layout, fonts, and un-overlapped text.
+    """
+    if not applied_rewrites:
+        return custom_docx_bytes
+
     doc = Document(io.BytesIO(custom_docx_bytes))
 
     replacements = []
@@ -122,36 +212,64 @@ def apply_rewrites_to_custom_docx(
         if orig and new_b:
             replacements.append((orig, new_b))
 
-    def replace_in_paragraphs(paragraphs):
-        for p in paragraphs:
-            text = p.text
-            if not text.strip():
-                continue
-            for orig, new_b in replacements:
-                clean_orig = orig.lstrip("-•* ").strip()
-                if clean_orig and clean_orig.lower() in text.lower():
-                    idx = text.lower().find(clean_orig.lower())
-                    if idx != -1:
-                        target_substring = text[idx:idx + len(clean_orig)]
-                        p.text = text.replace(target_substring, new_b)
-                        text = p.text
-                elif orig and orig.lower() in text.lower():
-                    idx = text.lower().find(orig.lower())
-                    if idx != -1:
-                        target_substring = text[idx:idx + len(orig)]
-                        p.text = text.replace(target_substring, new_b)
-                        text = p.text
+    if not replacements:
+        return custom_docx_bytes
 
-    replace_in_paragraphs(doc.paragraphs)
+    # Collect all paragraphs from document body and all table cells (including nested tables)
+    def collect_all_paragraphs(container):
+        paragraphs = list(container.paragraphs)
+        for table in container.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    paragraphs.extend(collect_all_paragraphs(cell))
+        return paragraphs
 
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                replace_in_paragraphs(cell.paragraphs)
+    all_paragraphs = collect_all_paragraphs(doc)
+
+    for orig, new_b in replacements:
+        for p in all_paragraphs:
+            if replace_in_paragraph_runs(p, orig, new_b):
+                break
 
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+def convert_docx_to_pdf_via_libreoffice(docx_bytes: bytes) -> Optional[bytes]:
+    """
+    Attempts headless conversion of DOCX bytes to PDF using LibreOffice/soffice if installed on server.
+    Returns None if LibreOffice is not available or if conversion fails.
+    """
+    soffice_path = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice_path:
+        return None
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_file = tmp_path / "resume_in.docx"
+            input_file.write_bytes(docx_bytes)
+
+            cmd = [
+                soffice_path,
+                "--headless",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(tmp_path),
+                str(input_file)
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            if res.returncode == 0:
+                output_pdf = tmp_path / "resume_in.pdf"
+                if output_pdf.exists():
+                    return output_pdf.read_bytes()
+    except Exception as e:
+        logger.warning(f"LibreOffice DOCX-to-PDF conversion failed: {e}")
+        return None
+
+    return None
 
 
 def build_docx_resume(

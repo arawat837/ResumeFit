@@ -71,6 +71,15 @@ def init_db(db_path: Optional[str] = None, db_url: Optional[str] = None) -> None
                     );
                     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
                     ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+
+                    CREATE TABLE IF NOT EXISTS scan_files (
+                        scan_id TEXT PRIMARY KEY,
+                        filename TEXT NOT NULL,
+                        file_bytes BYTEA NOT NULL,
+                        file_type TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_scan_files_id ON scan_files(scan_id);
                 """)
             logger.info("Supabase PostgreSQL tables & RLS verified successfully.")
         finally:
@@ -93,6 +102,18 @@ def init_db(db_path: Optional[str] = None, db_url: Optional[str] = None) -> None
                 """)
                 conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS scan_files (
+                        scan_id TEXT PRIMARY KEY,
+                        filename TEXT NOT NULL,
+                        file_bytes BLOB NOT NULL,
+                        file_type TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_scan_files_id ON scan_files(scan_id);
                 """)
         finally:
             conn.close()
@@ -282,3 +303,192 @@ def upgrade_user_to_pro(user_id: int, promo_code: str, db_path: Optional[str] = 
                 return format_user_dict(row)
         finally:
             conn.close()
+
+# In-memory fast cache for recent uploaded scan files
+_IN_MEMORY_SCAN_CACHE: Dict[str, Dict[str, Any]] = {}
+
+def save_scan_file(
+    scan_id: str,
+    filename: str,
+    file_bytes: bytes,
+    file_type: str,
+    db_path: Optional[str] = None,
+    db_url: Optional[str] = None
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    # Cache in memory
+    _IN_MEMORY_SCAN_CACHE[scan_id] = {
+        "scan_id": scan_id,
+        "filename": filename,
+        "file_bytes": file_bytes,
+        "file_type": file_type,
+        "created_at": now
+    }
+    # Keep cache bounded to 100 items
+    if len(_IN_MEMORY_SCAN_CACHE) > 100:
+        oldest_key = next(iter(_IN_MEMORY_SCAN_CACHE))
+        _IN_MEMORY_SCAN_CACHE.pop(oldest_key, None)
+
+    try:
+        if is_using_postgres(db_url):
+            conn = get_postgres_connection(db_url)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO scan_files (scan_id, filename, file_bytes, file_type, created_at)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (scan_id) DO UPDATE SET
+                            filename = EXCLUDED.filename,
+                            file_bytes = EXCLUDED.file_bytes,
+                            file_type = EXCLUDED.file_type,
+                            created_at = EXCLUDED.created_at;
+                        """,
+                        (scan_id, filename, psycopg2.Binary(file_bytes), file_type, now)
+                    )
+            finally:
+                conn.close()
+        else:
+            conn = get_sqlite_connection(db_path)
+            try:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO scan_files (scan_id, filename, file_bytes, file_type, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (scan_id, filename, file_bytes, file_type, now)
+                    )
+            finally:
+                conn.close()
+    except Exception as e:
+        logger.warning(f"Could not persist scan_file to database: {e}. In-memory cache is active.")
+
+
+def get_scan_file(
+    scan_id: str,
+    db_path: Optional[str] = None,
+    db_url: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    # Check in-memory cache first
+    if scan_id in _IN_MEMORY_SCAN_CACHE:
+        return _IN_MEMORY_SCAN_CACHE[scan_id]
+
+    try:
+        if is_using_postgres(db_url):
+            conn = get_postgres_connection(db_url)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT scan_id, filename, file_bytes, file_type, created_at FROM scan_files WHERE scan_id = %s;",
+                        (scan_id,)
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        raw_bytes = row["file_bytes"]
+                        if isinstance(raw_bytes, memoryview):
+                            raw_bytes = bytes(raw_bytes)
+                        record = {
+                            "scan_id": row["scan_id"],
+                            "filename": row["filename"],
+                            "file_bytes": raw_bytes,
+                            "file_type": row["file_type"],
+                            "created_at": row["created_at"]
+                        }
+                        _IN_MEMORY_SCAN_CACHE[scan_id] = record
+                        return record
+                    return None
+            finally:
+                conn.close()
+        else:
+            conn = get_sqlite_connection(db_path)
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        "SELECT scan_id, filename, file_bytes, file_type, created_at FROM scan_files WHERE scan_id = ?",
+                        (scan_id,)
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        raw_bytes = row["file_bytes"]
+                        if isinstance(raw_bytes, memoryview):
+                            raw_bytes = bytes(raw_bytes)
+                        record = {
+                            "scan_id": row["scan_id"],
+                            "filename": row["filename"],
+                            "file_bytes": raw_bytes,
+                            "file_type": row["file_type"],
+                            "created_at": row["created_at"]
+                        }
+                        _IN_MEMORY_SCAN_CACHE[scan_id] = record
+                        return record
+                    return None
+            finally:
+                conn.close()
+    except Exception as e:
+        logger.warning(f"Error querying scan_file from database: {e}")
+        return None
+
+
+def get_latest_scan_file(
+    db_path: Optional[str] = None,
+    db_url: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    # Check in-memory cache first
+    if _IN_MEMORY_SCAN_CACHE:
+        latest_key = next(reversed(_IN_MEMORY_SCAN_CACHE))
+        return _IN_MEMORY_SCAN_CACHE[latest_key]
+
+    try:
+        if is_using_postgres(db_url):
+            conn = get_postgres_connection(db_url)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT scan_id, filename, file_bytes, file_type, created_at FROM scan_files ORDER BY created_at DESC LIMIT 1;"
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        raw_bytes = row["file_bytes"]
+                        if isinstance(raw_bytes, memoryview):
+                            raw_bytes = bytes(raw_bytes)
+                        record = {
+                            "scan_id": row["scan_id"],
+                            "filename": row["filename"],
+                            "file_bytes": raw_bytes,
+                            "file_type": row["file_type"],
+                            "created_at": row["created_at"]
+                        }
+                        _IN_MEMORY_SCAN_CACHE[row["scan_id"]] = record
+                        return record
+                    return None
+            finally:
+                conn.close()
+        else:
+            conn = get_sqlite_connection(db_path)
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        "SELECT scan_id, filename, file_bytes, file_type, created_at FROM scan_files ORDER BY created_at DESC LIMIT 1"
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        raw_bytes = row["file_bytes"]
+                        if isinstance(raw_bytes, memoryview):
+                            raw_bytes = bytes(raw_bytes)
+                        record = {
+                            "scan_id": row["scan_id"],
+                            "filename": row["filename"],
+                            "file_bytes": raw_bytes,
+                            "file_type": row["file_type"],
+                            "created_at": row["created_at"]
+                        }
+                        _IN_MEMORY_SCAN_CACHE[row["scan_id"]] = record
+                        return record
+                    return None
+            finally:
+                conn.close()
+    except Exception as e:
+        logger.warning(f"Error querying latest scan_file: {e}")
+        return None
+

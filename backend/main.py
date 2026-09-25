@@ -1,4 +1,5 @@
 import logging
+import uuid
 from typing import Optional
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +17,7 @@ from contextlib import asynccontextmanager
 from presets.roles import ROLE_PRESETS
 from parsers import PDFParser, DOCXParser
 from agents.pipeline import AgentPipeline
-from database import init_db
+from database import init_db, save_scan_file
 from routers.auth import router as auth_router
 from routers.export_router import router as export_router
 
@@ -121,13 +122,23 @@ async def scan_resume(
             detail="Unsupported file format. Please upload a PDF (.pdf) or Word document (.docx)."
         )
 
-    # 3. Resume text parsing
-    if filename.endswith(".pdf"):
+    # 3. Persist original uploaded file's raw bytes for in-place original-format export
+    scan_id = uuid.uuid4().hex
+    file_type = "docx" if filename.endswith(".docx") else "pdf"
+    save_scan_file(
+        scan_id=scan_id,
+        filename=file.filename or f"resume.{file_type}",
+        file_bytes=file_bytes,
+        file_type=file_type
+    )
+
+    # 4. Resume text parsing
+    if file_type == "pdf":
         resume_text, formatting_meta = PDFParser.parse(file_bytes)
     else:
         resume_text, formatting_meta = DOCXParser.parse(file_bytes)
 
-    # 4. Resolve Job Description (if applicable)
+    # 5. Resolve Job Description (if applicable)
     jd_text = None
     if mode == "preset" and role_id:
         preset = ROLE_PRESETS.get(role_id)
@@ -142,12 +153,15 @@ async def scan_resume(
         mode = "general"
         jd_text = None
 
-    # 5. Execute Agentic Pipeline
+    # 6. Execute Agentic Pipeline
     result = await pipeline.run(
         resume_text=resume_text,
         formatting_meta=formatting_meta,
         mode=mode,
         jd_text=jd_text
     )
+
+    result["scan_id"] = scan_id
+    result["file_type"] = file_type
 
     return JSONResponse(content=result)

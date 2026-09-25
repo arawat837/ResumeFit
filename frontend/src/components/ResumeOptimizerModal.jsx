@@ -143,6 +143,7 @@ export default function ResumeOptimizerModal({
       const payload = {
         format,
         template_id: selectedTemplate === 'custom' ? 'original' : selectedTemplate,
+        scan_id: result?.scan_id || null,
         parsed_resume: parsed_resume,
         applied_rewrites: appliedRewrites
       };
