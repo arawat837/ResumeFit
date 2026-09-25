@@ -9,9 +9,33 @@ from typing import Dict, Any, List, Optional
 import json
 import logging
 import re
+import hashlib
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+# Quantification templates for deterministic fallback rewrites
+# Covering percentage gain, dollar impact, time saved, scale/volume, adoption/conversion rate, and velocity/throughput
+QUANT_TEMPLATES = [
+    ", improving process throughput by 28% and reducing turnaround time.",
+    ", delivering $25K+ in measurable cost savings across operational workflows.",
+    ", saving 8+ team hours weekly through automated workflow routines.",
+    ", scaling operations to handle 15,000+ data transactions with 99.5% accuracy.",
+    ", driving a 22% increase in stakeholder adoption and satisfaction rates.",
+    ", boosting operational efficiency by 30% while maintaining zero defect rates.",
+]
+
+# Action verbs pool for passive-verb replacement
+ACTION_VERB_POOL = [
+    "Spearheaded",
+    "Orchestrated",
+    "Engineered",
+    "Delivered",
+    "Formulated",
+    "Pioneered",
+    "Executed",
+    "Automated",
+]
 
 
 class RecommendationItem(BaseModel):
@@ -52,7 +76,8 @@ class RecommendationAgent:
                 "For experience bullet improvements:\n"
                 "1. Quote the EXACT bullet text from the candidate's resume under 'original_bullet'.\n"
                 "2. Provide an improved rewrite under 'rewrite_bullet' applying the Google XYZ formula (Accomplished [X] as measured by [Y] by doing [Z]), keeping their actual project context while adding realistic quantification and strong action verbs.\n"
-                "3. Set 'role' to the specific role or project title from their resume where this bullet appeared.\n\n"
+                "3. Set 'role' to the specific role or project title from their resume where this bullet appeared.\n"
+                "4. Ensure each rewrite_bullet uses a distinct metric type and closing clause — do not repeat the same percentage, time savings, or impact phrasing across recommendations. Vary the Google XYZ phrasing dynamically.\n\n"
                 "Return ONLY valid JSON matching this schema:\n"
                 "[\n"
                 "  {\n"
@@ -98,14 +123,37 @@ class RecommendationAgent:
                     if isinstance(raw_data, list):
                         validated = [RecommendationItem(**item).model_dump() for item in raw_data if isinstance(item, dict)]
 
-                        if len(validated) < 5:
+                        if len(validated) < 3:
                             logger.warning(
-                                f"Gemini returned only {len(validated)} recommendation(s) (minimum 5 required). "
+                                f"Gemini returned only {len(validated)} recommendation(s) (minimum 3 required). "
                                 f"(raw_response.text: {raw_text!r}) Falling through to deterministic fallback."
                             )
                             break
                         else:
-                            validated.sort(key=lambda x: x["priority"])
+                            # Keep Gemini's output as-is and pad remainder from fallback if fewer than 5,
+                            # excluding any original_bullet Gemini already covered
+                            if len(validated) < 5:
+                                fallback_recs = self._fallback_recommendations(scoring_result, parsed_resume, parsed_jd)
+                                covered_bullets = {
+                                    item["original_bullet"].strip().lower()
+                                    for item in validated
+                                    if item.get("original_bullet")
+                                }
+                                padding = [
+                                    r for r in fallback_recs
+                                    if not (r.get("original_bullet") and r["original_bullet"].strip().lower() in covered_bullets)
+                                ]
+                                validated.sort(key=lambda x: x.get("priority", 999))
+                                next_p = len(validated) + 1
+                                for pad_item in padding:
+                                    if len(validated) >= 5:
+                                        break
+                                    pad_copy = dict(pad_item)
+                                    pad_copy["priority"] = next_p
+                                    validated.append(pad_copy)
+                                    next_p += 1
+
+                            validated.sort(key=lambda x: x.get("priority", 999))
                             return {"data": validated, "used_gemini": True}
                 except Exception as e:
                     if ("503" in str(e) or "UNAVAILABLE" in str(e)) and attempt < 2:
@@ -162,7 +210,9 @@ class RecommendationAgent:
                     # Found an actual unquantified bullet from candidate's resume
                     # Generate a contextual Google XYZ rewrite keeping their exact core action
                     ends_punct = clean_bullet.rstrip(". ")
-                    rewrite = f"{ends_punct}, improving process throughput by 25% and saving 6+ hours weekly."
+                    b_hash = int(hashlib.md5(clean_bullet.encode("utf-8")).hexdigest(), 16)
+                    template = QUANT_TEMPLATES[b_hash % len(QUANT_TEMPLATES)]
+                    rewrite = f"{ends_punct}{template}"
                     
                     recs.append({
                         "priority": priority,
@@ -233,28 +283,39 @@ class RecommendationAgent:
             priority += 1
 
         # Check 5: Action Verb Openings in Candidate Bullets
+        passive_prefixes = [
+            "responsible for", "worked on", "helped to", "helped with", "helped",
+            "assisted in", "assisted with", "assisted"
+        ]
         for exp in experience_entries:
             role = exp.get("role", "Experience")
             for bullet in exp.get("bullets", []):
                 clean_bullet = bullet.strip().lstrip("-•* ").strip()
-                if clean_bullet and any(clean_bullet.lower().startswith(p) for p in ["responsible for", "worked on", "helped", "assisted"]):
-                    # Replace passive verb with power verb
-                    words = clean_bullet.split()
-                    verb_replacement = "Spearheaded" if "lead" in clean_bullet.lower() else "Optimized"
-                    rewritten_passive = f"{verb_replacement} {clean_bullet.lstrip('Responsible for worked on helped assisted').strip()}"
-                    recs.append({
-                        "priority": priority,
-                        "issue": f"Passive Bullet Opening in {role}",
-                        "suggestion": (
-                            f"In '{role}', the bullet \"{clean_bullet}\" starts with passive language. "
-                            "Begin with decisive action verbs like 'Spearheaded', 'Engineered', 'Optimized', or 'Automated'."
-                        ),
-                        "original_bullet": clean_bullet,
-                        "rewrite_bullet": rewritten_passive,
-                        "role": role
-                    })
-                    priority += 1
-                    break
+                if clean_bullet:
+                    matched_p = None
+                    for p in passive_prefixes:
+                        if clean_bullet.lower().startswith(p):
+                            matched_p = p
+                            break
+                    if matched_p:
+                        # Replace passive verb with power verb picked deterministically
+                        stripped = clean_bullet[len(matched_p):].lstrip(" ,:-")
+                        verb_idx = int(hashlib.md5(clean_bullet.encode("utf-8")).hexdigest(), 16) % len(ACTION_VERB_POOL)
+                        verb_replacement = ACTION_VERB_POOL[verb_idx]
+                        rewritten_passive = f"{verb_replacement} {stripped}"
+                        recs.append({
+                            "priority": priority,
+                            "issue": f"Passive Bullet Opening in {role}",
+                            "suggestion": (
+                                f"In '{role}', the bullet \"{clean_bullet}\" starts with passive language. "
+                                f"Begin with decisive action verbs like '{verb_replacement}', 'Engineered', 'Orchestrated', or 'Delivered'."
+                            ),
+                            "original_bullet": clean_bullet,
+                            "rewrite_bullet": rewritten_passive,
+                            "role": role
+                        })
+                        priority += 1
+                        break
             if len(recs) >= 6:
                 break
 
@@ -280,6 +341,8 @@ class RecommendationAgent:
                 for bullet in exp.get("bullets", []):
                     clean_b = bullet.strip().lstrip("-•* ").strip()
                     if clean_b and not any(r.get("original_bullet") == clean_b for r in recs):
+                        b_hash = int(hashlib.md5(clean_b.encode("utf-8")).hexdigest(), 16)
+                        t = QUANT_TEMPLATES[b_hash % len(QUANT_TEMPLATES)]
                         recs.append({
                             "priority": priority,
                             "issue": f"Expand Scope & Deliverables in {role}",
@@ -287,7 +350,7 @@ class RecommendationAgent:
                                 f"In '{role}', expand the context for \"{clean_b}\" by detailing the tools used and team collaboration."
                             ),
                             "original_bullet": clean_b,
-                            "rewrite_bullet": f"{clean_b.rstrip('.')} utilizing modern industry frameworks, exceeding delivery benchmarks by 15%.",
+                            "rewrite_bullet": f"{clean_b.rstrip('. ')}{t}",
                             "role": role
                         })
                         priority += 1
@@ -296,15 +359,41 @@ class RecommendationAgent:
                 if len(recs) >= 5:
                     break
 
-        # Fallback padding if resume had zero experience bullets
-        if len(recs) < 5:
-            recs.append({
-                "priority": priority,
-                "issue": "Add Targeted Project Experience",
-                "suggestion": "Include at least 2 structured technical projects or leadership experiences with quantified outcomes.",
-                "original_bullet": None,
-                "rewrite_bullet": None,
-                "role": None
-            })
+        # Fallback padding if resume had zero or very few experience bullets
+        general_fallbacks = [
+            (
+                "Add Targeted Project Experience",
+                "Include at least 2 structured technical projects or leadership experiences with quantified outcomes."
+            ),
+            (
+                "Incorporate Industry-Standard Keywords",
+                "Review target job descriptions to identify recurring frameworks, certifications, and technical proficiencies to include in your skills list."
+            ),
+            (
+                "Quantify Key Accomplishments",
+                "Aim for at least one numerical metric per bullet point (e.g., percentages, dollar amounts, hours saved) to demonstrate measurable impact."
+            ),
+            (
+                "Standardize Section Headings",
+                "Ensure your resume uses conventional ATS headings: 'Contact', 'Summary', 'Experience', 'Education', and 'Skills'."
+            ),
+            (
+                "Enhance Role Descriptions with Action Verbs",
+                "Begin each bullet point with strong action verbs such as 'Spearheaded', 'Engineered', 'Delivered', or 'Optimized'."
+            ),
+        ]
+        for issue_title, sugg_text in general_fallbacks:
+            if len(recs) >= 5:
+                break
+            if not any(r.get("issue") == issue_title for r in recs):
+                recs.append({
+                    "priority": priority,
+                    "issue": issue_title,
+                    "suggestion": sugg_text,
+                    "original_bullet": None,
+                    "rewrite_bullet": None,
+                    "role": None
+                })
+                priority += 1
 
         return recs

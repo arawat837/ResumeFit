@@ -24,12 +24,27 @@ ACTION_VERBS = {
     "trained", "transformed", "unified", "upgraded", "validated"
 }
 
-# General ATS Core Skill Benchmarks for entry-level / university resumes
-GENERAL_ATS_BENCHMARKS = [
-    "communication", "collaboration", "problem solving", "leadership",
-    "analytical", "project management", "research", "presentation",
-    "python", "sql", "excel", "data analysis", "git", "teamwork"
-]
+# Domain-keyed ATS Skill Benchmarks for general mode
+DOMAIN_BENCHMARKS: Dict[str, List[str]] = {
+    "tech": [
+        "python", "sql", "git", "data analysis", "docker", "apis", "cloud", "agile", "testing"
+    ],
+    "business_analyst": [
+        "excel", "sql", "tableau", "power bi", "data modeling", "process mapping", "stakeholder management", "requirements gathering", "kpis"
+    ],
+    "finance": [
+        "financial modeling", "excel", "valuation", "forecasting", "budgeting", "risk analysis", "accounting", "variance analysis"
+    ],
+    "marketing": [
+        "seo", "content strategy", "social media", "google analytics", "campaign management", "copywriting", "market research", "email marketing", "conversion rate"
+    ],
+    "general": [
+        "communication", "project management", "problem solving", "cross-functional collaboration", "analytical skills", "leadership", "process improvement"
+    ]
+}
+
+# Alias for backwards compatibility
+GENERAL_ATS_BENCHMARKS = DOMAIN_BENCHMARKS["general"]
 
 
 class ScoringAgent:
@@ -109,6 +124,42 @@ class ScoringAgent:
             parts.append(edu.get("institution", ""))
         return " ".join(parts).lower()
 
+    def _detect_domain(self, resume: Dict[str, Any]) -> str:
+        """
+        Detects the candidate's domain by checking which domain benchmark set
+        has the highest overlap with the candidate's parsed skills list.
+        If the max overlap is 0, defaults to 'general'.
+        """
+        raw_skills = resume.get("skills", [])
+        if not raw_skills:
+            return "general"
+
+        skills_list = [str(s).strip().lower() for s in raw_skills if str(s).strip()]
+        if not skills_list:
+            return "general"
+
+        best_domain = "general"
+        max_overlap = 0
+
+        # Check specialized domains first, then general
+        for domain in ["tech", "business_analyst", "finance", "marketing", "general"]:
+            benchmarks = DOMAIN_BENCHMARKS[domain]
+            overlap = 0
+            for b in benchmarks:
+                b_low = b.lower()
+                for s in skills_list:
+                    if b_low == s or (len(s) >= 3 and s in b_low) or (len(b_low) >= 3 and b_low in s):
+                        overlap += 1
+                        break
+            if overlap > max_overlap:
+                max_overlap = overlap
+                best_domain = domain
+
+        if max_overlap == 0:
+            return "general"
+
+        return best_domain
+
     def _calculate_keyword_match(
         self,
         resume: Dict[str, Any],
@@ -124,7 +175,7 @@ class ScoringAgent:
             all_targets = list(dict.fromkeys(required + keywords))
 
             if not all_targets:
-                return 75, {"matched": [], "missing": [], "mode": "jd_empty"}
+                return 75, {"matched": [], "missing": [], "detected_domain": None, "mode": "jd_empty"}
 
             matched = [t for t in all_targets if re.search(r"\b" + re.escape(t) + r"\b", full_text)]
             missing = [t for t in all_targets if t not in matched]
@@ -135,14 +186,18 @@ class ScoringAgent:
                 "matched": matched,
                 "missing": missing,
                 "total_targets": len(all_targets),
+                "detected_domain": None,
                 "mode": "jd"
             }
 
         # Mode B: General ATS mode (no JD)
-        # Evaluates core competency density & technical skills present
-        skills_found = [s.strip().lower() for s in resume.get("skills", [])]
+        # Evaluates core competency density & technical skills present using domain-aware benchmarks
+        domain = self._detect_domain(resume)
+        active_benchmarks = DOMAIN_BENCHMARKS[domain]
+
+        skills_found = [str(s).strip().lower() for s in resume.get("skills", []) if str(s).strip()]
         matched_benchmarks = [
-            b for b in GENERAL_ATS_BENCHMARKS
+            b for b in active_benchmarks
             if re.search(r"\b" + re.escape(b) + r"\b", full_text)
         ]
 
@@ -150,10 +205,11 @@ class ScoringAgent:
         score = 50 + min(30, skill_count * 3) + min(20, len(matched_benchmarks) * 3)
         score = max(25, min(95, score))
 
-        missing_benchmarks = [b for b in GENERAL_ATS_BENCHMARKS[:6] if b not in matched_benchmarks]
+        missing_benchmarks = [b for b in active_benchmarks if b not in matched_benchmarks]
         return score, {
             "matched": matched_benchmarks,
             "missing": missing_benchmarks,
+            "detected_domain": domain,
             "mode": "general"
         }
 
