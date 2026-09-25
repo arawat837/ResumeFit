@@ -65,3 +65,27 @@ export async function scanResume({ file, mode, roleId, customJd }) {
     throw err;
   }
 }
+
+export async function regenerateRecommendations(scanId) {
+  const res = await fetch(`${API_BASE_URL}/api/resume/regenerate-recommendations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scan_id: scanId })
+  });
+
+  if (!res.ok) {
+    let errorDetail = 'Failed to regenerate recommendations.';
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        errorDetail = errJson.detail;
+      }
+    } catch (_) {
+      errorDetail = `Server responded with status ${res.status}: ${res.statusText}`;
+    }
+    throw new Error(errorDetail);
+  }
+
+  return await res.json();
+}
+

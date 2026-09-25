@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Sparkles, Scale, RefreshCw, Crown } from 'lucide-react';
+import { ArrowLeft, Sparkles, Scale, RefreshCw, Crown, AlertCircle } from 'lucide-react';
 import ScoreGauge from './ScoreGauge';
 import ScoreBreakdown from './ScoreBreakdown';
 import RecommendationsList from './RecommendationsList';
 import ProPaywallStub from './ProPaywallStub';
 import ResumeOptimizerModal from './ResumeOptimizerModal';
 import { useAuth } from '../context/AuthContext';
+import { regenerateRecommendations } from '../services/api';
 
 export default function ResultsScreen({
   result,
@@ -15,8 +16,11 @@ export default function ResultsScreen({
 }) {
   const { isPro } = useAuth();
   const [isOptimizerModalOpen, setIsOptimizerModalOpen] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [regenerateError, setRegenerateError] = useState(null);
 
   const {
+    scan_id,
     ats_score = 0,
     breakdown = {},
     recommendations = [],
@@ -25,9 +29,13 @@ export default function ResultsScreen({
     parsed_summary = {}
   } = result || {};
 
+  const [currentRecommendations, setCurrentRecommendations] = useState(recommendations);
+  const [currentEngine, setCurrentEngine] = useState(engine);
+  const [currentAgentEngines, setCurrentAgentEngines] = useState(agent_engines);
+
   // Track which recommendations are selected by the user to apply to their resume
   const [selectedFixes, setSelectedFixes] = useState(() => {
-    return new Set(recommendations.map((_, i) => i));
+    return new Set(currentRecommendations.map((_, i) => i));
   });
 
   const handleToggleFix = (index) => {
@@ -42,7 +50,28 @@ export default function ResultsScreen({
     });
   };
 
-  const isGemini = engine === 'gemini';
+  const handleRegenerate = async () => {
+    if (!scan_id || isRegenerating) return;
+    setIsRegenerating(true);
+    setRegenerateError(null);
+    try {
+      const data = await regenerateRecommendations(scan_id);
+      if (data && data.recommendations) {
+        setCurrentRecommendations(data.recommendations);
+        setSelectedFixes(new Set(data.recommendations.map((_, i) => i)));
+        if (data.engine) setCurrentEngine(data.engine);
+        if (data.agent_engines) setCurrentAgentEngines(data.agent_engines);
+      }
+    } catch (err) {
+      console.error('Error regenerating recommendations:', err);
+      setRegenerateError(err.message || 'Failed to regenerate recommendations. Please try again.');
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+
+  const isGemini = currentEngine === 'gemini';
+
 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-8 animate-fadeIn">
@@ -72,7 +101,7 @@ export default function ResultsScreen({
 
           {/* Subtext indicator for agent breakdown */}
           <span className="text-[11px] text-slate-400 hidden md:inline">
-            (P: {agent_engines.parser ? 'AI' : 'Rule'} • JD: {agent_engines.jd === null ? 'N/A' : agent_engines.jd ? 'AI' : 'Rule'} • R: {agent_engines.recommendation ? 'AI' : 'Rule'})
+            (P: {currentAgentEngines.parser ? 'AI' : currentAgentEngines.parser === null ? 'N/A' : 'Rule'} • JD: {currentAgentEngines.jd === null ? 'N/A' : currentAgentEngines.jd ? 'AI' : 'Rule'} • R: {currentAgentEngines.recommendation ? 'AI' : 'Rule'})
           </span>
         </div>
       </div>
@@ -120,9 +149,16 @@ export default function ResultsScreen({
 
       {/* Recommendations Section */}
       <div className="space-y-6">
+        {regenerateError && (
+          <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2 animate-fadeIn">
+            <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+            <span>{regenerateError}</span>
+          </div>
+        )}
+
         {/* Full or Top 3 Recommendations based on Pro Status */}
         <RecommendationsList
-          recommendations={recommendations}
+          recommendations={currentRecommendations}
           isPro={isPro}
           selectedFixes={selectedFixes}
           onToggleFix={handleToggleFix}
@@ -132,7 +168,7 @@ export default function ResultsScreen({
         {/* Pro Locked Recommendations Stub (Only rendered for non-Pro users) */}
         {!isPro ? (
           <ProPaywallStub
-            recommendations={recommendations}
+            recommendations={currentRecommendations}
             onOpenUpgrade={onOpenUpgrade}
           />
         ) : (
@@ -146,7 +182,7 @@ export default function ResultsScreen({
                 <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <span>ResumeFit Pro Active</span>
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-extrabold border border-amber-200">
-                    All {recommendations.length} Fixes Unlocked
+                    All {currentRecommendations.length} Fixes Unlocked
                   </span>
                 </h4>
                 <p className="text-xs text-slate-600 mt-0.5">
@@ -171,19 +207,31 @@ export default function ResultsScreen({
       <ResumeOptimizerModal
         isOpen={isOptimizerModalOpen}
         onClose={() => setIsOptimizerModalOpen(false)}
-        result={result}
+        result={{ ...result, recommendations: currentRecommendations }}
         selectedFixes={selectedFixes}
         fileName={fileName}
       />
 
-      {/* Bottom Re-scan Action */}
-      <div className="text-center pt-4 pb-8">
+      {/* Bottom Actions: Regenerate Recommendations & Re-scan */}
+      <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-4 pb-8">
         <button
+          type="button"
+          onClick={handleRegenerate}
+          disabled={isRegenerating || !scan_id}
+          className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 border border-brand-200 shadow-soft transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Re-run recommendation fixes using cached parse data without re-uploading"
+        >
+          <RefreshCw className={`w-4 h-4 text-brand-600 ${isRegenerating ? 'animate-spin' : ''}`} />
+          <span>{isRegenerating ? 'Regenerating Recommendations...' : 'Regenerate Recommendations'}</span>
+        </button>
+
+        <button
+          type="button"
           onClick={onReset}
           className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl text-xs font-semibold text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 shadow-soft transition-colors"
         >
-          <RefreshCw className="w-4 h-4 text-slate-400" />
-          <span>Upload an updated revision or new resume</span>
+          <ArrowLeft className="w-4 h-4 text-slate-400" />
+          <span>Re-scan (upload updated file)</span>
         </button>
       </div>
     </div>

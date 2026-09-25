@@ -14,10 +14,11 @@ from config import (
     IS_CORS_FALLBACK
 )
 from contextlib import asynccontextmanager
+from pydantic import BaseModel
 from presets.roles import ROLE_PRESETS
 from parsers import PDFParser, DOCXParser
 from agents.pipeline import AgentPipeline
-from database import init_db, save_scan_file
+from database import init_db, save_scan_file, save_scan_result, get_scan_result
 from routers.auth import router as auth_router
 from routers.export_router import router as export_router
 
@@ -164,4 +165,67 @@ async def scan_resume(
     result["scan_id"] = scan_id
     result["file_type"] = file_type
 
+    # Persist parsed_resume, parsed_jd, and scoring_result for subsequent fast recommendation regeneration
+    save_scan_result(
+        scan_id=scan_id,
+        parsed_resume=result["parsed_resume"],
+        parsed_jd=result.get("parsed_jd"),
+        scoring_result=result["scoring_result"]
+    )
+
     return JSONResponse(content=result)
+
+
+class RegenerateRecommendationsRequest(BaseModel):
+    scan_id: str
+
+
+@app.post("/api/resume/regenerate-recommendations")
+async def regenerate_recommendations(payload: RegenerateRecommendationsRequest):
+    """
+    Regenerates recommendation fixes for an already-scanned resume.
+    Uses cached parsed_resume, parsed_jd, and scoring_result.
+    Executes ONLY recommendation_agent.run() (zero re-parsing, zero JD calls, saving Gemini quota).
+    """
+    scan_id = payload.scan_id
+    cached = get_scan_result(scan_id)
+    if not cached:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan result not found or expired. Please upload and re-scan your resume."
+        )
+
+    parsed_resume = cached["parsed_resume"]
+    parsed_jd = cached.get("parsed_jd")
+    scoring_result = cached["scoring_result"]
+
+    # Call ONLY recommendation_agent.run() - zero parser / JD agent calls
+    rec_res = await pipeline.recommendation_agent.run(
+        scoring_result=scoring_result,
+        parsed_resume=parsed_resume,
+        parsed_jd=parsed_jd
+    )
+
+    rec_used_gemini = rec_res["used_gemini"]
+
+    # Update cached recommendations
+    scoring_result["recommendations"] = rec_res["data"]
+    save_scan_result(
+        scan_id=scan_id,
+        parsed_resume=parsed_resume,
+        parsed_jd=parsed_jd,
+        scoring_result=scoring_result
+    )
+
+    return JSONResponse(content={
+        "scan_id": scan_id,
+        "recommendations": rec_res["data"],
+        "used_gemini": rec_used_gemini,
+        "engine": "gemini" if rec_used_gemini else "rubric_fallback",
+        "agent_engines": {
+            "parser": None,
+            "jd": None,
+            "recommendation": rec_used_gemini
+        }
+    })
+

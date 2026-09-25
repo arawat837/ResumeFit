@@ -2,6 +2,7 @@ import os
 import sqlite3
 import hashlib
 import hmac
+import json
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
@@ -80,6 +81,15 @@ def init_db(db_path: Optional[str] = None, db_url: Optional[str] = None) -> None
                         created_at TEXT NOT NULL
                     );
                     CREATE INDEX IF NOT EXISTS idx_scan_files_id ON scan_files(scan_id);
+
+                    CREATE TABLE IF NOT EXISTS scan_results (
+                        scan_id TEXT PRIMARY KEY,
+                        parsed_resume TEXT NOT NULL,
+                        parsed_jd TEXT,
+                        scoring_result TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_scan_results_id ON scan_results(scan_id);
                 """)
             logger.info("Supabase PostgreSQL tables & RLS verified successfully.")
         finally:
@@ -114,6 +124,18 @@ def init_db(db_path: Optional[str] = None, db_url: Optional[str] = None) -> None
                 """)
                 conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_scan_files_id ON scan_files(scan_id);
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS scan_results (
+                        scan_id TEXT PRIMARY KEY,
+                        parsed_resume TEXT NOT NULL,
+                        parsed_jd TEXT,
+                        scoring_result TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_scan_results_id ON scan_results(scan_id);
                 """)
         finally:
             conn.close()
@@ -491,4 +513,128 @@ def get_latest_scan_file(
     except Exception as e:
         logger.warning(f"Error querying latest scan_file: {e}")
         return None
+
+
+# In-memory fast cache for recent scan results (parsed_resume, parsed_jd, scoring_result)
+_IN_MEMORY_SCAN_RESULTS: Dict[str, Dict[str, Any]] = {}
+
+def save_scan_result(
+    scan_id: str,
+    parsed_resume: Dict[str, Any],
+    parsed_jd: Optional[Dict[str, Any]],
+    scoring_result: Dict[str, Any],
+    db_path: Optional[str] = None,
+    db_url: Optional[str] = None
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    record = {
+        "scan_id": scan_id,
+        "parsed_resume": parsed_resume,
+        "parsed_jd": parsed_jd,
+        "scoring_result": scoring_result,
+        "created_at": now
+    }
+    _IN_MEMORY_SCAN_RESULTS[scan_id] = record
+    if len(_IN_MEMORY_SCAN_RESULTS) > 100:
+        oldest_key = next(iter(_IN_MEMORY_SCAN_RESULTS))
+        _IN_MEMORY_SCAN_RESULTS.pop(oldest_key, None)
+
+    pr_json = json.dumps(parsed_resume)
+    pjd_json = json.dumps(parsed_jd) if parsed_jd else None
+    sr_json = json.dumps(scoring_result)
+
+    try:
+        if is_using_postgres(db_url):
+            conn = get_postgres_connection(db_url)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO scan_results (scan_id, parsed_resume, parsed_jd, scoring_result, created_at)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (scan_id) DO UPDATE SET
+                            parsed_resume = EXCLUDED.parsed_resume,
+                            parsed_jd = EXCLUDED.parsed_jd,
+                            scoring_result = EXCLUDED.scoring_result,
+                            created_at = EXCLUDED.created_at;
+                        """,
+                        (scan_id, pr_json, pjd_json, sr_json, now)
+                    )
+            finally:
+                conn.close()
+        else:
+            conn = get_sqlite_connection(db_path)
+            try:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO scan_results (scan_id, parsed_resume, parsed_jd, scoring_result, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (scan_id, pr_json, pjd_json, sr_json, now)
+                    )
+            finally:
+                conn.close()
+    except Exception as e:
+        logger.warning(f"Could not persist scan_result to database: {e}. In-memory cache is active.")
+
+
+def get_scan_result(
+    scan_id: str,
+    db_path: Optional[str] = None,
+    db_url: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    # Check in-memory cache first
+    if scan_id in _IN_MEMORY_SCAN_RESULTS:
+        return _IN_MEMORY_SCAN_RESULTS[scan_id]
+
+    try:
+        if is_using_postgres(db_url):
+            conn = get_postgres_connection(db_url)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT scan_id, parsed_resume, parsed_jd, scoring_result, created_at FROM scan_results WHERE scan_id = %s;",
+                        (scan_id,)
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        record = {
+                            "scan_id": row["scan_id"],
+                            "parsed_resume": json.loads(row["parsed_resume"]) if isinstance(row["parsed_resume"], str) else row["parsed_resume"],
+                            "parsed_jd": json.loads(row["parsed_jd"]) if row["parsed_jd"] and isinstance(row["parsed_jd"], str) else row["parsed_jd"],
+                            "scoring_result": json.loads(row["scoring_result"]) if isinstance(row["scoring_result"], str) else row["scoring_result"],
+                            "created_at": row["created_at"]
+                        }
+                        _IN_MEMORY_SCAN_RESULTS[scan_id] = record
+                        return record
+                    return None
+            finally:
+                conn.close()
+        else:
+            conn = get_sqlite_connection(db_path)
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        "SELECT scan_id, parsed_resume, parsed_jd, scoring_result, created_at FROM scan_results WHERE scan_id = ?",
+                        (scan_id,)
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        record = {
+                            "scan_id": row["scan_id"],
+                            "parsed_resume": json.loads(row["parsed_resume"]),
+                            "parsed_jd": json.loads(row["parsed_jd"]) if row["parsed_jd"] else None,
+                            "scoring_result": json.loads(row["scoring_result"]),
+                            "created_at": row["created_at"]
+                        }
+                        _IN_MEMORY_SCAN_RESULTS[scan_id] = record
+                        return record
+                    return None
+            finally:
+                conn.close()
+    except Exception as e:
+        logger.warning(f"Error querying scan_result from database: {e}")
+        return None
+
 

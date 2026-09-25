@@ -118,6 +118,8 @@ class AgentPipeline:
             "breakdown": scoring_result["breakdown"],
             "recommendations": recommendations,
             "parsed_resume": parsed_resume,
+            "parsed_jd": parsed_jd,
+            "scoring_result": scoring_result,
             "parsed_summary": {
                 "skills_detected": len(parsed_resume.get("skills", [])),
                 "experience_entries": len(parsed_resume.get("experience", [])),
